@@ -1,5 +1,3 @@
-// Stub — will house shared data models, repository interfaces, and DataStore helpers.
-// Populated in Step 2 onward.
 plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.android)
@@ -21,4 +19,9 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+}
+
+dependencies {
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.datastore.preferences)
 }

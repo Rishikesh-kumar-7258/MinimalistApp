@@ -1,5 +1,3 @@
-// Stub — will house feature-specific Composables and ViewModels (app drawer, search, etc.).
-// Populated in Step 2 onward.
 plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.android)
@@ -26,4 +24,13 @@ android {
     buildFeatures {
         compose = true
     }
+}
+
+dependencies {
+    implementation(project(":core"))
+    implementation(platform(libs.androidx.compose.bom))
+    implementation(libs.androidx.ui)
+    implementation(libs.androidx.material3)
+    implementation(libs.androidx.lifecycle.viewmodel.compose)
+    implementation(libs.androidx.lifecycle.runtime.compose)
 }

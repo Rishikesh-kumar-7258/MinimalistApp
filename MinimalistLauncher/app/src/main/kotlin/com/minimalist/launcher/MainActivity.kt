@@ -8,28 +8,21 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import androidx.activity.viewModels
+import com.minimalist.launcher.feature.appdrawer.AppDrawerScreen
+import com.minimalist.launcher.feature.appdrawer.AppDrawerViewModel
 import com.minimalist.launcher.ui.theme.MinimalistLauncherTheme
-import java.time.LocalTime
 
 class MainActivity : ComponentActivity() {
 
     private val requestDefaultLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
-    ) { /* user made their choice; no action needed here */ }
+    ) { /* user made their choice; no action needed */ }
+
+    private val viewModel: AppDrawerViewModel by viewModels {
+        val app = application as LauncherApplication
+        AppDrawerViewModel.Factory(app.appRepository, app.preferencesRepository)
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -39,7 +32,7 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             MinimalistLauncherTheme {
-                HomeScreen()
+                AppDrawerScreen(viewModel)
             }
         }
     }
@@ -62,39 +55,5 @@ class MainActivity : ComponentActivity() {
             }
         }
         // On API 26–28 the OS prompts the user naturally the first time Home is pressed
-    }
-}
-
-@Composable
-fun HomeScreen() {
-    val greeting = when (LocalTime.now().hour) {
-        in 5..11 -> "good morning."
-        in 12..16 -> "good afternoon."
-        in 17..20 -> "good evening."
-        else -> "good night."
-    }
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-            .padding(40.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(
-                text = greeting,
-                style = MaterialTheme.typography.titleLarge,
-                color = MaterialTheme.colorScheme.onBackground,
-                letterSpacing = 6.sp
-            )
-            Spacer(modifier = Modifier.height(12.dp))
-            Text(
-                text = "minimalist",
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f),
-                letterSpacing = 8.sp
-            )
-        }
     }
 }
