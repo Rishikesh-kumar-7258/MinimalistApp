@@ -10,9 +10,17 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.lifecycle.lifecycleScope
+import com.minimalist.launcher.core.model.AppearanceSettings
 import com.minimalist.launcher.feature.appdrawer.AppDrawerScreen
 import com.minimalist.launcher.feature.appdrawer.AppDrawerViewModel
+import com.minimalist.launcher.feature.settings.SettingsScreen
+import com.minimalist.launcher.feature.settings.SettingsViewModel
 import com.minimalist.launcher.ui.theme.MinimalistLauncherTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -29,15 +37,37 @@ class MainActivity : ComponentActivity() {
         AppDrawerViewModel.Factory(app.appRepository, app.preferencesRepository, app.contactsRepository)
     }
 
+    private val settingsViewModel: SettingsViewModel by viewModels {
+        SettingsViewModel.Factory((application as LauncherApplication).preferencesRepository)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         suppressBackButton()
 
-        // Draw first frame before any Binder calls — prevents ANR on slow system_server.
+        val preferencesRepository = (application as LauncherApplication).preferencesRepository
+
         setContent {
-            MinimalistLauncherTheme {
-                AppDrawerScreen(viewModel)
+            // Observe appearance settings — recomposes when any setting changes.
+            val appearance by produceState(initialValue = AppearanceSettings()) {
+                preferencesRepository.appearanceSettings.collect { value = it }
+            }
+
+            var showSettings by remember { mutableStateOf(false) }
+
+            MinimalistLauncherTheme(appearance = appearance) {
+                if (showSettings) {
+                    SettingsScreen(
+                        viewModel = settingsViewModel,
+                        onBack    = { showSettings = false },
+                    )
+                } else {
+                    AppDrawerScreen(
+                        viewModel      = viewModel,
+                        onOpenSettings = { showSettings = true },
+                    )
+                }
             }
         }
 

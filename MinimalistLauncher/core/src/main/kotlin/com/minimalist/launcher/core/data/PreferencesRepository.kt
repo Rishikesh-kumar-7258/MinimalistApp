@@ -5,9 +5,14 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
+import com.minimalist.launcher.core.model.AppFontFamily
+import com.minimalist.launcher.core.model.AppearanceSettings
 import com.minimalist.launcher.core.model.ClockFormat
+import com.minimalist.launcher.core.model.FontSize
 import com.minimalist.launcher.core.model.PinnedItem
 import com.minimalist.launcher.core.model.SortOrder
+import com.minimalist.launcher.core.model.TextAlignment
+import com.minimalist.launcher.core.model.ThemeMode
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
@@ -21,6 +26,13 @@ class PreferencesRepository(private val dataStore: DataStore<Preferences>) {
         private val CLOCK_FORMAT  = stringPreferencesKey("clock_format")
         // 5 independent slot keys so individual slots can be updated atomically.
         private fun pinnedKey(slot: Int) = stringPreferencesKey("pinned_$slot")
+        // Step 5 keys
+        private val THEME_MODE        = stringPreferencesKey("theme_mode")
+        private val FONT_SIZE         = stringPreferencesKey("font_size")
+        private val FONT_FAMILY       = stringPreferencesKey("font_family")
+        private val TEXT_ALIGNMENT    = stringPreferencesKey("text_alignment")
+        private val BG_COLOR          = stringPreferencesKey("bg_color")
+        private val TEXT_COLOR        = stringPreferencesKey("text_color")
     }
 
     val hiddenApps: Flow<Set<String>> =
@@ -117,6 +129,42 @@ class PreferencesRepository(private val dataStore: DataStore<Preferences>) {
     private fun encode(item: PinnedItem): String = when (item) {
         is PinnedItem.App     -> "app::${item.packageName}::${item.label}"
         is PinnedItem.Contact -> "contact::${item.number}::${item.name}"
+    }
+
+    // ── Step 5: appearance settings ──────────────────────────────────────────
+
+    val appearanceSettings: Flow<AppearanceSettings> = dataStore.data.map { prefs ->
+        AppearanceSettings(
+            themeMode     = runCatching { ThemeMode.valueOf(prefs[THEME_MODE] ?: "") }.getOrDefault(ThemeMode.DARK),
+            fontSize      = runCatching { FontSize.valueOf(prefs[FONT_SIZE] ?: "") }.getOrDefault(FontSize.MEDIUM),
+            fontFamily    = runCatching { AppFontFamily.valueOf(prefs[FONT_FAMILY] ?: "") }.getOrDefault(AppFontFamily.MONOSPACE),
+            textAlignment = runCatching { TextAlignment.valueOf(prefs[TEXT_ALIGNMENT] ?: "") }.getOrDefault(TextAlignment.LEFT),
+            customBgColor   = prefs[BG_COLOR],
+            customTextColor = prefs[TEXT_COLOR],
+        )
+    }
+
+    suspend fun setThemeMode(mode: ThemeMode) {
+        dataStore.edit { it[THEME_MODE] = mode.name }
+    }
+
+    suspend fun setFontSize(size: FontSize) {
+        dataStore.edit { it[FONT_SIZE] = size.name }
+    }
+
+    suspend fun setFontFamily(family: AppFontFamily) {
+        dataStore.edit { it[FONT_FAMILY] = family.name }
+    }
+
+    suspend fun setTextAlignment(alignment: TextAlignment) {
+        dataStore.edit { it[TEXT_ALIGNMENT] = alignment.name }
+    }
+
+    suspend fun setCustomColors(bg: String?, text: String?) {
+        dataStore.edit { prefs ->
+            if (bg != null) prefs[BG_COLOR] = bg else prefs.remove(BG_COLOR)
+            if (text != null) prefs[TEXT_COLOR] = text else prefs.remove(TEXT_COLOR)
+        }
     }
 
 }

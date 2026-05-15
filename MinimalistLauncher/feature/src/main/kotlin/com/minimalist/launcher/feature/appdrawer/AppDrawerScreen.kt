@@ -67,12 +67,21 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.ui.text.style.TextAlign
 import com.minimalist.launcher.core.model.AppInfo
 import com.minimalist.launcher.core.model.PinnedItem
 import com.minimalist.launcher.core.model.SearchResult
 import com.minimalist.launcher.core.model.SortOrder
+import com.minimalist.launcher.core.model.TextAlignment
+import com.minimalist.launcher.feature.LocalAppearance
 import kotlinx.coroutines.launch
 import kotlin.math.abs
+
+private fun TextAlignment.toTextAlign(): TextAlign = when (this) {
+    TextAlignment.LEFT   -> TextAlign.Left
+    TextAlignment.CENTER -> TextAlign.Center
+    TextAlignment.RIGHT  -> TextAlign.Right
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Top-level screen — HorizontalPager with Home (page 0) and App Drawer (page 1)
@@ -80,7 +89,7 @@ import kotlin.math.abs
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
-fun AppDrawerScreen(viewModel: AppDrawerViewModel) {
+fun AppDrawerScreen(viewModel: AppDrawerViewModel, onOpenSettings: () -> Unit = {}) {
     val uiState          by viewModel.uiState.collectAsStateWithLifecycle()
     val keyboardController = LocalSoftwareKeyboardController.current
     val focusManager       = LocalFocusManager.current
@@ -187,6 +196,7 @@ fun AppDrawerScreen(viewModel: AppDrawerViewModel) {
                     onPinnedClick  = viewModel::onPinnedItemClick,
                     onPinnedLong   = viewModel::onPinnedItemLongPress,
                     onSwipeUp      = viewModel::launchGoogleSearch,
+                    onOpenSettings = onOpenSettings,
                 )
                 else -> AppDrawerPage(
                     uiState          = uiState,
@@ -243,6 +253,7 @@ private fun HomeScreenPage(
     onPinnedClick: (PinnedItem) -> Unit,
     onPinnedLong: (Int) -> Unit,
     onSwipeUp: () -> Unit,
+    onOpenSettings: () -> Unit,
 ) {
     // Detect a clearly upward swipe without consuming pointer events so the
     // HorizontalPager can still handle horizontal swipes in this page.
@@ -295,6 +306,24 @@ private fun HomeScreenPage(
                     items          = uiState.pinnedItems,
                     onItemClick    = onPinnedClick,
                     onItemLongPress = onPinnedLong,
+                )
+            }
+
+            Spacer(Modifier.weight(1f))
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(end = 32.dp, bottom = 24.dp),
+                contentAlignment = Alignment.BottomEnd,
+            ) {
+                Text(
+                    text  = "settings",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.2f),
+                    modifier = Modifier
+                        .clickable { onOpenSettings() }
+                        .padding(8.dp),
                 )
             }
         }
@@ -391,6 +420,7 @@ private fun ClockSection(
     onToggleFormat: () -> Unit,
 ) {
     if (time.isEmpty()) return
+    val textAlign = LocalAppearance.current.textAlignment.toTextAlign()
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -399,15 +429,19 @@ private fun ClockSection(
             .padding(top = 40.dp, bottom = 20.dp),
     ) {
         Text(
-            text  = time,
-            style = MaterialTheme.typography.displayMedium,
-            color = MaterialTheme.colorScheme.onBackground,
+            text      = time,
+            style     = MaterialTheme.typography.displayMedium,
+            color     = MaterialTheme.colorScheme.onBackground,
+            textAlign = textAlign,
+            modifier  = Modifier.fillMaxWidth(),
         )
         Spacer(Modifier.height(4.dp))
         Text(
-            text  = date,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
+            text      = date,
+            style     = MaterialTheme.typography.bodyMedium,
+            color     = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
+            textAlign = textAlign,
+            modifier  = Modifier.fillMaxWidth(),
         )
     }
 }
@@ -550,11 +584,13 @@ private fun AppTextItem(
         label = "item_scale",
     )
 
+    val textAlign = LocalAppearance.current.textAlignment.toTextAlign()
     Text(
-        text  = label,
-        style = MaterialTheme.typography.bodyLarge,
-        color = MaterialTheme.colorScheme.onBackground,
-        modifier = modifier
+        text      = label,
+        style     = MaterialTheme.typography.bodyLarge,
+        color     = MaterialTheme.colorScheme.onBackground,
+        textAlign = textAlign,
+        modifier  = modifier
             .fillMaxWidth()
             .graphicsLayer { scaleX = scale; scaleY = scale }
             .combinedClickable(
@@ -621,6 +657,7 @@ private fun SearchResultRow(
         label = "result_scale",
     )
 
+    val textAlign = LocalAppearance.current.textAlignment.toTextAlign()
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -635,10 +672,11 @@ private fun SearchResultRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            text     = label,
-            style    = MaterialTheme.typography.bodyLarge,
-            color    = MaterialTheme.colorScheme.onBackground,
-            modifier = Modifier.weight(1f),
+            text      = label,
+            style     = MaterialTheme.typography.bodyLarge,
+            color     = MaterialTheme.colorScheme.onBackground,
+            textAlign = textAlign,
+            modifier  = Modifier.weight(1f),
         )
         if (hint != null) {
             Text(
