@@ -1,5 +1,6 @@
 package com.minimalist.launcher.feature.appdrawer
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -11,6 +12,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -22,18 +24,34 @@ class AppDrawerViewModel(
     private val allApps = MutableStateFlow<List<AppInfo>>(emptyList())
     private val selectedApp = MutableStateFlow<AppInfo?>(null)
     private val isLoading = MutableStateFlow(true)
+    private val loadError = MutableStateFlow<Throwable?>(null)
 
     init {
+        loadApps()
+    }
+
+    private fun loadApps() {
+        isLoading.value = true
+        loadError.value = null
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 allApps.value = appRepository.getInstalledApps()
+            } catch (e: Throwable) {
+                Log.e("AppDrawerViewModel", "Failed to load apps", e)
+                loadError.value = e
             } finally {
                 isLoading.value = false
             }
         }
     }
 
-    private val appState = combine(allApps, isLoading) { apps, loading -> Pair(apps, loading) }
+    fun retryLoadApps() {
+        loadApps()
+    }
+
+    private val appState = combine(allApps, isLoading, loadError) { apps, loading, error ->
+        Triple(apps, loading, error)
+    }
 
     private val prefState = combine(
         preferencesRepository.hiddenApps,
@@ -41,7 +59,7 @@ class AppDrawerViewModel(
         preferencesRepository.launchCounts
     ) { hidden, sort, counts -> Triple(hidden, sort, counts) }
 
-    val uiState = combine(appState, prefState, selectedApp) { (apps, loading), (hidden, sort, counts), selected ->
+    val uiState = combine(appState, prefState, selectedApp) { (apps, loading, error), (hidden, sort, counts), selected ->
         val visible = apps.filter { it.packageName !in hidden }
         val sorted = when (sort) {
             SortOrder.ALPHABETICAL -> visible.sortedBy { it.label.lowercase() }
@@ -51,17 +69,24 @@ class AppDrawerViewModel(
             apps = sorted,
             sortOrder = sort,
             isLoading = loading,
-            selectedApp = selected
+            selectedApp = selected,
+            error = error,
         )
-    }.stateIn(
-        scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(5_000),
-        initialValue = AppDrawerUiState()
-    )
+    }
+        .flowOn(Dispatchers.Default)   // keep filtering/sorting off the Main thread
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.Lazily, // never stop once started — no restarts, no loading flash
+            initialValue = AppDrawerUiState()
+        )
 
     fun onAppClick(app: AppInfo) {
         viewModelScope.launch {
-            preferencesRepository.recordLaunch(app.packageName)
+            try {
+                preferencesRepository.recordLaunch(app.packageName)
+            } catch (e: Exception) {
+                Log.e("AppDrawerViewModel", "Failed to record launch", e)
+            }
             appRepository.launch(app.packageName)
         }
     }

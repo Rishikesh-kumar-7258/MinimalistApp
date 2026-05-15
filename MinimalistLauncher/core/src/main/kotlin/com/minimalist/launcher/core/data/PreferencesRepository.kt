@@ -29,10 +29,20 @@ class PreferencesRepository(private val dataStore: DataStore<Preferences>) {
 
     val launchCounts: Flow<Map<String, Int>> =
         dataStore.data.map { prefs ->
-            prefs[LAUNCH_COUNTS]?.associate { entry ->
+            prefs[LAUNCH_COUNTS]?.mapNotNull { entry ->
                 val colon = entry.indexOf(':')
-                entry.substring(0, colon) to (entry.substring(colon + 1).toIntOrNull() ?: 0)
-            } ?: emptyMap()
+                if (colon >= 0) {
+                    val packageName = entry.substring(0, colon)
+                    val count = entry.substring(colon + 1).toIntOrNull() ?: 0
+                    if (packageName.isNotEmpty()) {
+                        packageName to count
+                    } else {
+                        null
+                    }
+                } else {
+                    null
+                }
+            }?.associate { it } ?: emptyMap()
         }
 
     suspend fun setHidden(packageName: String, hidden: Boolean) {

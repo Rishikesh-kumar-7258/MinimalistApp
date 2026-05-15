@@ -7,5 +7,6 @@ data class AppDrawerUiState(
     val apps: List<AppInfo> = emptyList(),
     val sortOrder: SortOrder = SortOrder.ALPHABETICAL,
     val isLoading: Boolean = true,
-    val selectedApp: AppInfo? = null
+    val selectedApp: AppInfo? = null,
+    val error: Throwable? = null,
 )

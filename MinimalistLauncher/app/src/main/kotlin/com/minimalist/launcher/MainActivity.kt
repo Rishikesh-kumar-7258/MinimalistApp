@@ -9,9 +9,13 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.lifecycle.lifecycleScope
 import com.minimalist.launcher.feature.appdrawer.AppDrawerScreen
 import com.minimalist.launcher.feature.appdrawer.AppDrawerViewModel
 import com.minimalist.launcher.ui.theme.MinimalistLauncherTheme
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
 
@@ -28,13 +32,15 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         suppressBackButton()
-        promptSetDefaultLauncherIfNeeded()
 
+        // Draw first frame before any Binder calls — prevents ANR on slow system_server.
         setContent {
             MinimalistLauncherTheme {
                 AppDrawerScreen(viewModel)
             }
         }
+
+        promptSetDefaultLauncherIfNeeded()
     }
 
     private fun suppressBackButton() {
@@ -47,13 +53,20 @@ class MainActivity : ComponentActivity() {
 
     private fun promptSetDefaultLauncherIfNeeded() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val roleManager = getSystemService(RoleManager::class.java)
-            if (!roleManager.isRoleHeld(RoleManager.ROLE_HOME)) {
-                requestDefaultLauncher.launch(
-                    roleManager.createRequestRoleIntent(RoleManager.ROLE_HOME)
-                )
+            // Run Binder calls on IO so the main thread stays free.
+            lifecycleScope.launch {
+                val shouldPrompt = withContext(Dispatchers.IO) {
+                    val roleManager = getSystemService(RoleManager::class.java)
+                    roleManager != null && !roleManager.isRoleHeld(RoleManager.ROLE_HOME)
+                }
+                if (shouldPrompt) {
+                    val roleManager = getSystemService(RoleManager::class.java) ?: return@launch
+                    requestDefaultLauncher.launch(
+                        roleManager.createRequestRoleIntent(RoleManager.ROLE_HOME)
+                    )
+                }
             }
         }
-        // On API 26–28 the OS prompts the user naturally the first time Home is pressed
+        // On API 26–28 the OS prompts naturally on the first Home press
     }
 }
