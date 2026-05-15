@@ -9,9 +9,12 @@ import com.minimalist.launcher.core.data.ContactsRepository
 import com.minimalist.launcher.core.data.PreferencesRepository
 import com.minimalist.launcher.core.data.SettingsActions
 import com.minimalist.launcher.core.model.AppInfo
+import com.minimalist.launcher.core.model.ClockFormat
+import com.minimalist.launcher.core.model.PinnedItem
 import com.minimalist.launcher.core.model.SearchResult
 import com.minimalist.launcher.core.model.SortOrder
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
@@ -22,6 +25,8 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
 
 class AppDrawerViewModel(
     private val appRepository: AppRepository,
@@ -29,7 +34,8 @@ class AppDrawerViewModel(
     private val contactsRepository: ContactsRepository,
 ) : ViewModel() {
 
-    // ── App list ────────────────────────────────────────────────────────────
+    // ── App list (Step 2) ────────────────────────────────────────────────────
+
     private val allApps   = MutableStateFlow<List<AppInfo>>(emptyList())
     private val isLoading = MutableStateFlow(true)
     private val loadError = MutableStateFlow<Throwable?>(null)
@@ -63,25 +69,18 @@ class AppDrawerViewModel(
         preferencesRepository.launchCounts,
     ) { hidden, sort, counts -> Triple(hidden, sort, counts) }
 
-    // ── Search ──────────────────────────────────────────────────────────────
-    private val selectedApp  = MutableStateFlow<AppInfo?>(null)
+    // ── Search (Step 3) ──────────────────────────────────────────────────────
+
     private val _searchQuery = MutableStateFlow("")
 
-    // Single shared debounced flow — both contact queries and app filtering
-    // use this so all results appear together 150 ms after the user stops typing.
     @Suppress("OPT_IN_USAGE")
     private val debouncedQuery = _searchQuery
         .debounce(150)
         .stateIn(viewModelScope, SharingStarted.Lazily, "")
 
-    // Incremented when READ_CONTACTS is granted at runtime so the contacts
-    // query re-runs even though debouncedQuery hasn't changed.
-    // (StateFlow won't re-emit the same String, so a plain nudge is needed.)
     private val contactsVersion = MutableStateFlow(0)
 
-    fun onContactsPermissionGranted() {
-        contactsVersion.value++
-    }
+    fun onContactsPermissionGranted() { contactsVersion.value++ }
 
     @Suppress("OPT_IN_USAGE")
     private val contactResults = combine(debouncedQuery, contactsVersion) { q, _ -> q }
@@ -93,40 +92,75 @@ class AppDrawerViewModel(
         }
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
-    // Pairs the debounced query with debounced contact results.
     private val searchState = combine(debouncedQuery, contactResults) { q, contacts ->
-        Pair(q, contacts)
+        q to contacts
+    }
+
+    // ── Selection state (app sheet + pinned-slot sheet) ──────────────────────
+
+    private val selectedApp       = MutableStateFlow<AppInfo?>(null)
+    private val _editingPinnedSlot = MutableStateFlow<Int?>(null)
+
+    private val selectionState = combine(selectedApp, _editingPinnedSlot) { app, slot ->
+        app to slot
+    }
+
+    // ── Home screen (Step 4) ─────────────────────────────────────────────────
+
+    // Clock: re-emits every second; flatMapLatest restarts the inner loop when
+    // the clock format preference changes so the format takes effect immediately.
+    @Suppress("OPT_IN_USAGE")
+    private val clockState = preferencesRepository.clockFormat.flatMapLatest { format ->
+        flow {
+            while (true) {
+                val now      = LocalDateTime.now()
+                val use24h   = format == ClockFormat.HOUR_24
+                val timeFmt  = DateTimeFormatter.ofPattern(if (use24h) "HH:mm" else "h:mm a")
+                val dateFmt  = DateTimeFormatter.ofPattern("EEEE, d MMMM")
+                emit(Triple(now.format(timeFmt), now.format(dateFmt), use24h))
+                delay(1_000)
+            }
+        }.flowOn(Dispatchers.Default)
+    }
+
+    // Pinned items cached as a StateFlow so pinApp() can read the current value
+    // without suspending.
+    private val pinnedItemsFlow = preferencesRepository.pinnedItems()
+        .stateIn(viewModelScope, SharingStarted.Lazily, List(5) { null })
+
+    // Clock + pins combined into a single home-state emission. Kept separate
+    // from the app-drawer state so the 1-second clock tick does NOT re-trigger
+    // app list filtering/sorting.
+    private val homeState = combine(clockState, pinnedItemsFlow) { clock, pins ->
+        clock to pins   // Pair<Triple<String,String,Boolean>, List<PinnedItem?>>
     }
 
     // ── Combined UI state ────────────────────────────────────────────────────
-    // Five flows: appState, prefState, selectedApp, raw query (for display),
-    // searchState (debounced, for filtering).
-    val uiState = combine(appState, prefState, selectedApp, _searchQuery, searchState) {
-        (apps, loading, error), (hidden, sort, counts), selected, rawQuery, (debouncedQ, contacts) ->
 
-        // Always compute the sorted full list so it can be shown in both
-        // normal mode and the debounce window (while the user is still typing).
+    // Inner combine (5 flows) handles app list + search. selectedApp and
+    // editingPinnedSlot share the selectionState slot to keep the count at 5.
+    private val rawUiState = combine(
+        appState, prefState, selectionState, _searchQuery, searchState,
+    ) { (apps, loading, error), (hidden, sort, counts), (selected, editSlot), rawQuery, (debouncedQ, contacts) ->
+
         val visible = apps.filter { it.packageName !in hidden }
-        val sorted = when (sort) {
+        val sorted  = when (sort) {
             SortOrder.ALPHABETICAL -> visible.sortedBy { it.label.lowercase() }
             SortOrder.FREQUENCY    -> visible.sortedByDescending { counts[it.packageName] ?: 0 }
         }
 
         if (debouncedQ.isBlank()) {
-            // Normal mode OR inside the 150 ms debounce window.
-            // Either way show the full sorted app list so there is no jarring
-            // "no results" flash while the user is mid-keystroke.
             AppDrawerUiState(
-                apps = sorted,
-                sortOrder = sort,
-                isLoading = loading,
-                selectedApp = selected,
-                error = error,
-                searchQuery = rawQuery,   // raw — keeps the search bar text current
-                searchResults = emptyList(),
+                apps              = sorted,
+                sortOrder         = sort,
+                isLoading         = loading,
+                selectedApp       = selected,
+                editingPinnedSlot = editSlot,
+                error             = error,
+                searchQuery       = rawQuery,
+                searchResults     = emptyList(),
             )
         } else {
-            // Debounce has settled — filter apps, contacts, settings together.
             val appResults: List<SearchResult> = visible
                 .filter { it.label.contains(debouncedQ, ignoreCase = true) }
                 .sortedBy { it.label.lowercase() }
@@ -135,31 +169,40 @@ class AppDrawerViewModel(
             val settingResults: List<SearchResult> = SettingsActions.search(debouncedQ)
 
             AppDrawerUiState(
-                apps = emptyList(),
-                sortOrder = sort,
-                isLoading = loading,
-                selectedApp = selected,
-                error = error,
-                searchQuery = rawQuery,
-                searchResults = appResults + contacts + settingResults,
+                apps              = emptyList(),
+                sortOrder         = sort,
+                isLoading         = loading,
+                selectedApp       = selected,
+                editingPinnedSlot = editSlot,
+                error             = error,
+                searchQuery       = rawQuery,
+                searchResults     = appResults + contacts + settingResults,
             )
         }
-    }
-        .flowOn(Dispatchers.Default)
-        .stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.Lazily,
-            initialValue = AppDrawerUiState(),
+    }.flowOn(Dispatchers.Default)
+
+    // Outer combine layers home state on top. The clock tick produces a new
+    // homeState emission every second; combine uses the cached rawUiState value
+    // so app filtering is NOT re-run on every tick.
+    val uiState = combine(rawUiState, homeState) { base, (clock, pins) ->
+        val (time, date, use24h) = clock
+        base.copy(
+            currentTime  = time,
+            currentDate  = date,
+            use24h       = use24h,
+            pinnedItems  = pins,
         )
+    }.stateIn(
+        scope        = viewModelScope,
+        started      = SharingStarted.Lazily,
+        initialValue = AppDrawerUiState(),
+    )
 
-    // ── Actions ──────────────────────────────────────────────────────────────
-    fun onSearchQueryChange(query: String) {
-        _searchQuery.value = query
-    }
+    // ── Search actions ───────────────────────────────────────────────────────
 
-    fun clearSearch() {
-        _searchQuery.value = ""
-    }
+    fun onSearchQueryChange(query: String) { _searchQuery.value = query }
+
+    fun clearSearch() { _searchQuery.value = "" }
 
     fun onSearchResultClick(result: SearchResult) {
         viewModelScope.launch {
@@ -176,6 +219,8 @@ class AppDrawerViewModel(
         }
     }
 
+    // ── App drawer actions ───────────────────────────────────────────────────
+
     fun onAppClick(app: AppInfo) {
         viewModelScope.launch {
             clearSearch()
@@ -185,9 +230,7 @@ class AppDrawerViewModel(
         }
     }
 
-    fun onAppLongPress(app: AppInfo) {
-        selectedApp.value = app
-    }
+    fun onAppLongPress(app: AppInfo) { selectedApp.value = app }
 
     fun hideApp(app: AppInfo) {
         viewModelScope.launch {
@@ -200,9 +243,56 @@ class AppDrawerViewModel(
         viewModelScope.launch { preferencesRepository.setSortOrder(order) }
     }
 
-    fun dismissBottomSheet() {
-        selectedApp.value = null
+    fun dismissBottomSheet() { selectedApp.value = null }
+
+    // ── Pinned shortcuts actions (Step 4) ────────────────────────────────────
+
+    fun onPinnedItemClick(item: PinnedItem) {
+        when (item) {
+            is PinnedItem.App     -> appRepository.launch(item.packageName)
+            is PinnedItem.Contact -> appRepository.launchContact(item.number)
+        }
     }
+
+    fun onPinnedItemLongPress(slot: Int) {
+        _editingPinnedSlot.value = slot
+    }
+
+    fun dismissPinnedEditor() {
+        _editingPinnedSlot.value = null
+    }
+
+    fun removePinnedItem(slot: Int) {
+        viewModelScope.launch {
+            preferencesRepository.setPinnedItem(slot, null)
+            _editingPinnedSlot.value = null
+        }
+    }
+
+    // Pins the app into the first empty slot. Called from the app options sheet.
+    fun pinApp(app: AppInfo) {
+        viewModelScope.launch {
+            val emptySlot = pinnedItemsFlow.value.indexOfFirst { it == null }
+            if (emptySlot >= 0) {
+                preferencesRepository.setPinnedItem(
+                    emptySlot,
+                    PinnedItem.App(app.packageName, app.label),
+                )
+            }
+            selectedApp.value = null   // dismiss the app options sheet
+        }
+    }
+
+    // ── Clock format action (Step 4) ─────────────────────────────────────────
+
+    fun toggleClockFormat() {
+        viewModelScope.launch {
+            val next = if (uiState.value.use24h) ClockFormat.HOUR_12 else ClockFormat.HOUR_24
+            preferencesRepository.setClockFormat(next)
+        }
+    }
+
+    // ── Factory ─────────────────────────────────────────────────────────────
 
     class Factory(
         private val appRepository: AppRepository,

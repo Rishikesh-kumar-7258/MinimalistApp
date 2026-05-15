@@ -1,16 +1,23 @@
 package com.minimalist.launcher.feature.appdrawer
 
 import com.minimalist.launcher.core.model.AppInfo
+import com.minimalist.launcher.core.model.PinnedItem
 import com.minimalist.launcher.core.model.SearchResult
 import com.minimalist.launcher.core.model.SortOrder
 
 data class AppDrawerUiState(
+    // ── App drawer (Steps 2–3) ───────────────────────────────────────────────
     val apps: List<AppInfo> = emptyList(),
     val sortOrder: SortOrder = SortOrder.ALPHABETICAL,
     val isLoading: Boolean = true,
     val selectedApp: AppInfo? = null,
     val error: Throwable? = null,
-    // Search
     val searchQuery: String = "",
     val searchResults: List<SearchResult> = emptyList(),
+    // ── Home screen (Step 4) ─────────────────────────────────────────────────
+    val currentTime: String = "",
+    val currentDate: String = "",
+    val use24h: Boolean = false,
+    val pinnedItems: List<PinnedItem?> = emptyList(),
+    val editingPinnedSlot: Int? = null,   // slot being long-pressed → shows remove sheet
 )

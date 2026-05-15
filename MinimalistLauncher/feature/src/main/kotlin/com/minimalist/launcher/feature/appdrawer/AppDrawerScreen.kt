@@ -56,6 +56,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.minimalist.launcher.core.model.AppInfo
+import com.minimalist.launcher.core.model.PinnedItem
 import com.minimalist.launcher.core.model.SearchResult
 import com.minimalist.launcher.core.model.SortOrder
 
@@ -150,6 +151,24 @@ fun AppDrawerScreen(viewModel: AppDrawerViewModel) {
             .statusBarsPadding()
             .nestedScroll(nestedScrollConnection),
     ) {
+        // ── Step 4: home screen content ──────────────────────────────────────
+        // Shown above the search bar; hidden while the user is actively typing.
+        if (uiState.searchQuery.isEmpty()) {
+            ClockSection(
+                time           = uiState.currentTime,
+                date           = uiState.currentDate,
+                onToggleFormat = viewModel::toggleClockFormat,
+            )
+            val filledPins = uiState.pinnedItems.filterNotNull()
+            if (filledPins.isNotEmpty()) {
+                PinnedSection(
+                    items          = uiState.pinnedItems,
+                    onItemClick    = viewModel::onPinnedItemClick,
+                    onItemLongPress = { slot -> viewModel.onPinnedItemLongPress(slot) },
+                )
+            }
+        }
+        // ── Step 3: search bar ───────────────────────────────────────────────
         SearchBar(
             query = uiState.searchQuery,
             onQueryChange = viewModel::onSearchQueryChange,
@@ -207,9 +226,19 @@ fun AppDrawerScreen(viewModel: AppDrawerViewModel) {
 
     if (uiState.selectedApp != null) {
         AppOptionsSheet(
-            app      = uiState.selectedApp!!,
-            onHide   = { viewModel.hideApp(it) },
+            app       = uiState.selectedApp!!,
+            canPin    = uiState.pinnedItems.any { it == null },
+            onPin     = { viewModel.pinApp(it) },
+            onHide    = { viewModel.hideApp(it) },
             onDismiss = viewModel::dismissBottomSheet,
+        )
+    }
+
+    uiState.editingPinnedSlot?.let { slot ->
+        PinnedItemSheet(
+            item      = uiState.pinnedItems.getOrNull(slot),
+            onRemove  = { viewModel.removePinnedItem(slot) },
+            onDismiss = viewModel::dismissPinnedEditor,
         )
     }
 }
@@ -492,12 +521,117 @@ private fun SortLabel(text: String, active: Boolean, onClick: () -> Unit) {
     )
 }
 
+// ── Step 4 composables ────────────────────────────────────────────────────────
+
+@Composable
+private fun ClockSection(
+    time: String,
+    date: String,
+    onToggleFormat: () -> Unit,
+) {
+    if (time.isEmpty()) return   // clock not yet initialised — skip for one frame
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onToggleFormat)
+            .padding(horizontal = 32.dp)
+            .padding(top = 40.dp, bottom = 20.dp),
+    ) {
+        Text(
+            text  = time,
+            style = MaterialTheme.typography.displayMedium,
+            color = MaterialTheme.colorScheme.onBackground,
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text  = date,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
+        )
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun PinnedSection(
+    items: List<PinnedItem?>,
+    onItemClick: (PinnedItem) -> Unit,
+    onItemLongPress: (Int) -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 32.dp)
+            .padding(bottom = 8.dp),
+    ) {
+        items.forEachIndexed { slot, item ->
+            if (item == null) return@forEachIndexed
+            val label = when (item) {
+                is PinnedItem.App     -> item.label
+                is PinnedItem.Contact -> item.name
+            }
+            Text(
+                text  = label,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .combinedClickable(
+                        onClick     = { onItemClick(item) },
+                        onLongClick = { onItemLongPress(slot) },
+                    )
+                    .padding(vertical = 10.dp),
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PinnedItemSheet(
+    item: PinnedItem?,
+    onRemove: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState       = sheetState,
+        containerColor   = MaterialTheme.colorScheme.surface,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 32.dp)
+                .padding(bottom = 32.dp),
+        ) {
+            val title = when (item) {
+                is PinnedItem.App     -> item.label
+                is PinnedItem.Contact -> item.name
+                null                  -> "pinned shortcut"
+            }
+            Text(
+                text  = title,
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Spacer(Modifier.height(16.dp))
+            HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))
+            Spacer(Modifier.height(8.dp))
+            SheetAction("remove") { onRemove() }
+        }
+    }
+}
+
 // ── Bottom sheet ──────────────────────────────────────────────────────────────
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AppOptionsSheet(
     app: AppInfo,
+    canPin: Boolean,
+    onPin: (AppInfo) -> Unit,
     onHide: (AppInfo) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -522,7 +656,7 @@ private fun AppOptionsSheet(
             Spacer(Modifier.height(16.dp))
             HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))
             Spacer(Modifier.height(8.dp))
-            SheetAction("pin")      { /* Step 4 */ }
+            if (canPin) SheetAction("pin") { onPin(app) }
             SheetAction("hide")     { onHide(app) }
             SheetAction("group")    { /* future */ }
             SheetAction("restrict") { /* Step 9 */ }
