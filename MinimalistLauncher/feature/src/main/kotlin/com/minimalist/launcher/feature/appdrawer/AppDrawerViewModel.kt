@@ -64,12 +64,27 @@ class AppDrawerViewModel(
     ) { hidden, sort, counts -> Triple(hidden, sort, counts) }
 
     // ── Search ──────────────────────────────────────────────────────────────
-    private val selectedApp   = MutableStateFlow<AppInfo?>(null)
-    private val _searchQuery  = MutableStateFlow("")
+    private val selectedApp  = MutableStateFlow<AppInfo?>(null)
+    private val _searchQuery = MutableStateFlow("")
 
-    @Suppress("OPT_IN_USAGE") // flatMapLatest is stable in coroutines >= 1.6
-    private val contactResults = _searchQuery
+    // Single shared debounced flow — both contact queries and app filtering
+    // use this so all results appear together 150 ms after the user stops typing.
+    @Suppress("OPT_IN_USAGE")
+    private val debouncedQuery = _searchQuery
         .debounce(150)
+        .stateIn(viewModelScope, SharingStarted.Lazily, "")
+
+    // Incremented when READ_CONTACTS is granted at runtime so the contacts
+    // query re-runs even though debouncedQuery hasn't changed.
+    // (StateFlow won't re-emit the same String, so a plain nudge is needed.)
+    private val contactsVersion = MutableStateFlow(0)
+
+    fun onContactsPermissionGranted() {
+        contactsVersion.value++
+    }
+
+    @Suppress("OPT_IN_USAGE")
+    private val contactResults = combine(debouncedQuery, contactsVersion) { q, _ -> q }
         .flatMapLatest { q ->
             if (q.isBlank()) flowOf(emptyList())
             else flow<List<SearchResult.Contact>> {
@@ -78,40 +93,46 @@ class AppDrawerViewModel(
         }
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
-    private val searchState = combine(_searchQuery, contactResults) { q, contacts ->
+    // Pairs the debounced query with debounced contact results.
+    private val searchState = combine(debouncedQuery, contactResults) { q, contacts ->
         Pair(q, contacts)
     }
 
     // ── Combined UI state ────────────────────────────────────────────────────
-    val uiState = combine(appState, prefState, selectedApp, searchState) {
-        (apps, loading, error), (hidden, sort, counts), selected, (query, contacts) ->
+    // Five flows: appState, prefState, selectedApp, raw query (for display),
+    // searchState (debounced, for filtering).
+    val uiState = combine(appState, prefState, selectedApp, _searchQuery, searchState) {
+        (apps, loading, error), (hidden, sort, counts), selected, rawQuery, (debouncedQ, contacts) ->
 
-        if (query.isBlank()) {
-            // Normal mode — same behaviour as before search was added.
-            val visible = apps.filter { it.packageName !in hidden }
-            val sorted = when (sort) {
-                SortOrder.ALPHABETICAL -> visible.sortedBy { it.label.lowercase() }
-                SortOrder.FREQUENCY    -> visible.sortedByDescending { counts[it.packageName] ?: 0 }
-            }
+        // Always compute the sorted full list so it can be shown in both
+        // normal mode and the debounce window (while the user is still typing).
+        val visible = apps.filter { it.packageName !in hidden }
+        val sorted = when (sort) {
+            SortOrder.ALPHABETICAL -> visible.sortedBy { it.label.lowercase() }
+            SortOrder.FREQUENCY    -> visible.sortedByDescending { counts[it.packageName] ?: 0 }
+        }
+
+        if (debouncedQ.isBlank()) {
+            // Normal mode OR inside the 150 ms debounce window.
+            // Either way show the full sorted app list so there is no jarring
+            // "no results" flash while the user is mid-keystroke.
             AppDrawerUiState(
                 apps = sorted,
                 sortOrder = sort,
                 isLoading = loading,
                 selectedApp = selected,
                 error = error,
-                searchQuery = query,
+                searchQuery = rawQuery,   // raw — keeps the search bar text current
                 searchResults = emptyList(),
             )
         } else {
-            // Search mode — filter apps + merge contacts + settings.
-            val appResults: List<SearchResult> = apps
-                .filter { it.packageName !in hidden }
-                .filter { it.label.contains(query, ignoreCase = true) }
+            // Debounce has settled — filter apps, contacts, settings together.
+            val appResults: List<SearchResult> = visible
+                .filter { it.label.contains(debouncedQ, ignoreCase = true) }
                 .sortedBy { it.label.lowercase() }
                 .map { SearchResult.App(it) }
 
-            val settingResults: List<SearchResult> = SettingsActions.search(query)
-            val contactResults: List<SearchResult>  = contacts
+            val settingResults: List<SearchResult> = SettingsActions.search(debouncedQ)
 
             AppDrawerUiState(
                 apps = emptyList(),
@@ -119,8 +140,8 @@ class AppDrawerViewModel(
                 isLoading = loading,
                 selectedApp = selected,
                 error = error,
-                searchQuery = query,
-                searchResults = appResults + contactResults + settingResults,
+                searchQuery = rawQuery,
+                searchResults = appResults + contacts + settingResults,
             )
         }
     }

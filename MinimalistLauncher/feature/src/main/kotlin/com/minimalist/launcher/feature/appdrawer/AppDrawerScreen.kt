@@ -26,8 +26,11 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -40,6 +43,16 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.minimalist.launcher.core.model.AppInfo
@@ -51,9 +64,69 @@ import com.minimalist.launcher.core.model.SortOrder
 fun AppDrawerScreen(viewModel: AppDrawerViewModel) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val keyboardController = LocalSoftwareKeyboardController.current
+    val context = LocalContext.current
 
-    val listState    = rememberLazyListState()
+    val focusManager   = LocalFocusManager.current
+    val listState      = rememberLazyListState()
     val focusRequester = remember { FocusRequester() }
+
+    // Track whether the search bar itself has input focus so BackHandler can
+    // fire even when the user opened the keyboard without typing anything.
+    var isSearchBarFocused by remember { mutableStateOf(false) }
+
+    // ── Focus management ──────────────────────────────────────────────────────
+
+    // 1. Back button: when the search bar is active (focused or has text) the
+    //    back press should dismiss it, not be swallowed by the home-screen sink.
+    //    BackHandler is added AFTER MainActivity's suppress callback (LIFO order),
+    //    so it takes priority whenever it is enabled.
+    BackHandler(enabled = isSearchBarFocused || uiState.searchQuery.isNotEmpty()) {
+        viewModel.clearSearch()
+        focusManager.clearFocus()
+        keyboardController?.hide()
+    }
+
+    // 2. Scroll: when the user starts scrolling the app list while the keyboard
+    //    is open, dismiss it so the list has full screen space.
+    LaunchedEffect(listState.isScrollInProgress) {
+        if (listState.isScrollInProgress) {
+            focusManager.clearFocus()
+            keyboardController?.hide()
+        }
+    }
+
+    // 3. External clear (e.g. Home press → onNewIntent → clearSearch()): the
+    //    query becomes empty from outside the screen, so clean up focus here.
+    //    Using isEmpty() as the key means this only fires on the empty↔non-empty
+    //    transition, not on every individual keystroke.
+    LaunchedEffect(uiState.searchQuery.isEmpty()) {
+        if (uiState.searchQuery.isEmpty()) {
+            focusManager.clearFocus()
+            keyboardController?.hide()
+        }
+    }
+
+    // ── Runtime permission for contacts ──────────────────────────────────────
+    // READ_CONTACTS is a dangerous permission — declaring it in the manifest is
+    // not enough. We request it lazily the first time the user activates search.
+    val requestContactsPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) viewModel.onContactsPermissionGranted()
+    }
+
+    // Fire once when the search bar transitions from empty → non-empty.
+    // The Boolean key means the effect only re-launches if that state flips,
+    // not on every individual keystroke.
+    val isSearchActive = uiState.searchQuery.isNotEmpty()
+    LaunchedEffect(isSearchActive) {
+        if (isSearchActive &&
+            context.checkSelfPermission(Manifest.permission.READ_CONTACTS)
+                != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestContactsPermission.launch(Manifest.permission.READ_CONTACTS)
+        }
+    }
 
     // Pull-down anywhere on the list to focus the search bar.
     val nestedScrollConnection = remember(focusRequester) {
@@ -82,9 +155,11 @@ fun AppDrawerScreen(viewModel: AppDrawerViewModel) {
             onQueryChange = viewModel::onSearchQueryChange,
             onClear = {
                 viewModel.clearSearch()
+                focusManager.clearFocus()
                 keyboardController?.hide()
             },
             focusRequester = focusRequester,
+            onFocusChange = { isSearchBarFocused = it },
         )
 
         // Sort toggle only visible when not searching.
@@ -100,7 +175,8 @@ fun AppDrawerScreen(viewModel: AppDrawerViewModel) {
 
             uiState.error != null -> ErrorState(onRetry = viewModel::retryLoadApps)
 
-            uiState.searchQuery.isNotEmpty() -> SearchResultsList(
+            // Debounce has settled and produced results — show filtered list.
+            uiState.searchResults.isNotEmpty() -> SearchResultsList(
                 modifier   = Modifier.weight(1f),
                 results    = uiState.searchResults,
                 listState  = listState,
@@ -108,20 +184,24 @@ fun AppDrawerScreen(viewModel: AppDrawerViewModel) {
                     keyboardController?.hide()
                     viewModel.onSearchResultClick(result)
                 },
-                onAppLongPress = { app ->
-                    viewModel.onAppLongPress(app)
-                },
+                onAppLongPress = { app -> viewModel.onAppLongPress(app) },
             )
 
-            uiState.apps.isEmpty() -> CenteredHint("no apps found")
-
-            else -> AppList(
-                modifier      = Modifier.weight(1f),
-                apps          = uiState.apps,
-                listState     = listState,
-                onAppClick    = viewModel::onAppClick,
+            // Full app list is available — show it.
+            // This covers: normal mode AND the 150 ms debounce window while typing,
+            // so the user never sees a jarring "no results" flash mid-keystroke.
+            uiState.apps.isNotEmpty() -> AppList(
+                modifier       = Modifier.weight(1f),
+                apps           = uiState.apps,
+                listState      = listState,
+                onAppClick     = viewModel::onAppClick,
                 onAppLongPress = viewModel::onAppLongPress,
             )
+
+            // Debounce settled, query was non-blank, but nothing matched.
+            uiState.searchQuery.isNotEmpty() -> CenteredHint("no results")
+
+            else -> CenteredHint("no apps found")
         }
     }
 
@@ -138,59 +218,101 @@ fun AppDrawerScreen(viewModel: AppDrawerViewModel) {
 
 @Composable
 private fun SearchBar(
-    query: String,
+    query: String,          // from ViewModel — used only to detect external clears
     onQueryChange: (String) -> Unit,
     onClear: () -> Unit,
     focusRequester: FocusRequester,
+    onFocusChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = 32.dp)
-            .padding(top = 16.dp, bottom = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        BasicTextField(
-            value = query,
-            onValueChange = onQueryChange,
-            modifier = Modifier
-                .weight(1f)
-                .focusRequester(focusRequester),
-            singleLine = true,
-            textStyle = MaterialTheme.typography.bodyLarge.copy(
-                color = MaterialTheme.colorScheme.onBackground,
-            ),
-            keyboardOptions = KeyboardOptions(
-                capitalization = KeyboardCapitalization.None,
-                autoCorrect    = false,
-                keyboardType   = KeyboardType.Text,
-                imeAction      = ImeAction.Search,
-            ),
-            decorationBox = { innerTextField ->
-                Box {
-                    if (query.isEmpty()) {
-                        Text(
-                            text  = "search apps, contacts, settings…",
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.25f),
-                        )
-                    }
-                    innerTextField()
-                }
-            },
-        )
+    // FIX 3: Use TextFieldValue locally so the cursor position is preserved
+    // across every recomposition. With plain String, Compose resets the cursor
+    // to 0 on each state update, making the 2nd typed character appear before
+    // the 1st. TextFieldValue carries the cursor/selection as part of the state.
+    var fieldValue by remember { mutableStateOf(TextFieldValue(query)) }
 
-        if (query.isNotEmpty()) {
-            Text(
-                text  = "×",
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.35f),
-                modifier = Modifier
-                    .clickable(onClick = onClear)
-                    .padding(start = 12.dp, top = 4.dp, bottom = 4.dp),
-            )
+    // Sync when the ViewModel clears the query from outside (e.g. after an app
+    // launch). Only reset when the ViewModel explicitly empties the string; do
+    // NOT reset while the user is still typing (rawQuery already matches fieldValue.text).
+    LaunchedEffect(query) {
+        if (query.isEmpty() && fieldValue.text.isNotEmpty()) {
+            fieldValue = TextFieldValue("")
         }
+    }
+
+    // FIX 1: Wrap the search bar in its own surface so it is visually distinct
+    // from the app list below. A subtle bottom divider draws the boundary.
+    Column(modifier = modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 32.dp)
+                // FIX 2: Symmetric vertical padding so text is never clipped.
+                .padding(vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            BasicTextField(
+                // FIX 3: drive the field with TextFieldValue, not String.
+                value = fieldValue,
+                onValueChange = { newValue ->
+                    fieldValue = newValue           // update cursor + text locally
+                    onQueryChange(newValue.text)    // send text-only to ViewModel
+                },
+                modifier = Modifier
+                    .weight(1f)
+                    .focusRequester(focusRequester)
+                    .onFocusChanged { onFocusChange(it.isFocused) },
+                singleLine = true,
+                textStyle = MaterialTheme.typography.bodyLarge.copy(
+                    color = MaterialTheme.colorScheme.onBackground,
+                ),
+                // BasicTextField defaults to SolidColor(Color.Black), which is
+                // invisible on dark backgrounds. Match the text colour instead.
+                cursorBrush = SolidColor(MaterialTheme.colorScheme.onBackground),
+                keyboardOptions = KeyboardOptions(
+                    capitalization = KeyboardCapitalization.None,
+                    autoCorrect    = false,
+                    keyboardType   = KeyboardType.Text,
+                    imeAction      = ImeAction.Search,
+                ),
+                decorationBox = { innerTextField ->
+                    // FIX 2: fillMaxWidth + vertical padding inside decorationBox
+                    // so the placeholder text has room and is never clipped.
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 2.dp),
+                        contentAlignment = Alignment.CenterStart,
+                    ) {
+                        if (fieldValue.text.isEmpty()) {
+                            Text(
+                                text  = "search apps, contacts, settings…",
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.25f),
+                            )
+                        }
+                        innerTextField()
+                    }
+                },
+            )
+
+            if (fieldValue.text.isNotEmpty()) {
+                Text(
+                    text  = "×",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.35f),
+                    modifier = Modifier
+                        .clickable(onClick = onClear)
+                        .padding(start = 16.dp, top = 4.dp, bottom = 4.dp),
+                )
+            }
+        }
+
+        // FIX 1: Thin divider line that separates the search bar from the list.
+        HorizontalDivider(
+            color     = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.08f),
+            thickness = 1.dp,
+        )
     }
 }
 
