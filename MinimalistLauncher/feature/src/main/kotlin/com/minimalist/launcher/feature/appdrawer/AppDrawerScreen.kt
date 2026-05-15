@@ -1,9 +1,19 @@
 package com.minimalist.launcher.feature.appdrawer
 
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.LocalIndication
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -16,6 +26,9 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.PagerState
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -30,28 +43,27 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
-import android.Manifest
-import android.content.pm.PackageManager
-import androidx.activity.compose.BackHandler
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -59,36 +71,74 @@ import com.minimalist.launcher.core.model.AppInfo
 import com.minimalist.launcher.core.model.PinnedItem
 import com.minimalist.launcher.core.model.SearchResult
 import com.minimalist.launcher.core.model.SortOrder
+import kotlinx.coroutines.launch
+import kotlin.math.abs
 
-@OptIn(ExperimentalMaterial3Api::class)
+// ─────────────────────────────────────────────────────────────────────────────
+// Top-level screen — HorizontalPager with Home (page 0) and App Drawer (page 1)
+// ─────────────────────────────────────────────────────────────────────────────
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun AppDrawerScreen(viewModel: AppDrawerViewModel) {
-    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val uiState          by viewModel.uiState.collectAsStateWithLifecycle()
     val keyboardController = LocalSoftwareKeyboardController.current
-    val context = LocalContext.current
+    val focusManager       = LocalFocusManager.current
+    val context            = LocalContext.current
+    val scope              = rememberCoroutineScope()
 
-    val focusManager   = LocalFocusManager.current
+    val pagerState     = rememberPagerState(initialPage = 0, pageCount = { 2 })
     val listState      = rememberLazyListState()
     val focusRequester = remember { FocusRequester() }
 
-    // Track whether the search bar itself has input focus so BackHandler can
-    // fire even when the user opened the keyboard without typing anything.
     var isSearchBarFocused by remember { mutableStateOf(false) }
 
-    // ── Focus management ──────────────────────────────────────────────────────
+    // ── Focus helpers ─────────────────────────────────────────────────────────
 
-    // 1. Back button: when the search bar is active (focused or has text) the
-    //    back press should dismiss it, not be swallowed by the home-screen sink.
-    //    BackHandler is added AFTER MainActivity's suppress callback (LIFO order),
-    //    so it takes priority whenever it is enabled.
-    BackHandler(enabled = isSearchBarFocused || uiState.searchQuery.isNotEmpty()) {
+    fun dismissSearch() {
         viewModel.clearSearch()
         focusManager.clearFocus()
         keyboardController?.hide()
     }
 
-    // 2. Scroll: when the user starts scrolling the app list while the keyboard
-    //    is open, dismiss it so the list has full screen space.
+    fun goHome() {
+        dismissSearch()
+        scope.launch { pagerState.animateScrollToPage(0) }
+    }
+
+    // ── Back handler ──────────────────────────────────────────────────────────
+    // Priority (LIFO, added after MainActivity's suppress callback):
+    //   1. If search is active → clear search & keyboard
+    //   2. Else if on drawer page → navigate back to home
+    //   3. Otherwise → swallowed by MainActivity's suppress callback (home screen)
+
+    BackHandler(
+        enabled = isSearchBarFocused
+                || uiState.searchQuery.isNotEmpty()
+                || pagerState.currentPage != 0
+    ) {
+        when {
+            isSearchBarFocused || uiState.searchQuery.isNotEmpty() -> dismissSearch()
+            else -> goHome()
+        }
+    }
+
+    // ── Effects ───────────────────────────────────────────────────────────────
+
+    // Navigate to home when ViewModel emits the signal (e.g. onNewIntent).
+    LaunchedEffect(Unit) {
+        viewModel.navigateToHome.collect { goHome() }
+    }
+
+    // Returning to home page → dismiss keyboard.
+    LaunchedEffect(pagerState.currentPage) {
+        if (pagerState.currentPage == 0) {
+            focusManager.clearFocus()
+            keyboardController?.hide()
+        }
+    }
+
+    // List scrolling → dismiss keyboard.
     LaunchedEffect(listState.isScrollInProgress) {
         if (listState.isScrollInProgress) {
             focusManager.clearFocus()
@@ -96,10 +146,7 @@ fun AppDrawerScreen(viewModel: AppDrawerViewModel) {
         }
     }
 
-    // 3. External clear (e.g. Home press → onNewIntent → clearSearch()): the
-    //    query becomes empty from outside the screen, so clean up focus here.
-    //    Using isEmpty() as the key means this only fires on the empty↔non-empty
-    //    transition, not on every individual keystroke.
+    // External clear (onNewIntent via goHome) → dismiss focus.
     LaunchedEffect(uiState.searchQuery.isEmpty()) {
         if (uiState.searchQuery.isEmpty()) {
             focusManager.clearFocus()
@@ -107,21 +154,13 @@ fun AppDrawerScreen(viewModel: AppDrawerViewModel) {
         }
     }
 
-    // ── Runtime permission for contacts ──────────────────────────────────────
-    // READ_CONTACTS is a dangerous permission — declaring it in the manifest is
-    // not enough. We request it lazily the first time the user activates search.
+    // Contact permission — requested the first time search becomes active.
     val requestContactsPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        if (granted) viewModel.onContactsPermissionGranted()
-    }
+    ) { granted -> if (granted) viewModel.onContactsPermissionGranted() }
 
-    // Fire once when the search bar transitions from empty → non-empty.
-    // The Boolean key means the effect only re-launches if that state flips,
-    // not on every individual keystroke.
-    val isSearchActive = uiState.searchQuery.isNotEmpty()
-    LaunchedEffect(isSearchActive) {
-        if (isSearchActive &&
+    LaunchedEffect(uiState.searchQuery.isNotEmpty()) {
+        if (uiState.searchQuery.isNotEmpty() &&
             context.checkSelfPermission(Manifest.permission.READ_CONTACTS)
                 != PackageManager.PERMISSION_GRANTED
         ) {
@@ -129,100 +168,49 @@ fun AppDrawerScreen(viewModel: AppDrawerViewModel) {
         }
     }
 
-    // Pull-down anywhere on the list to focus the search bar.
-    val nestedScrollConnection = remember(focusRequester) {
-        object : NestedScrollConnection {
-            override fun onPostScroll(
-                consumed: Offset,
-                available: Offset,
-                source: NestedScrollSource,
-            ): Offset {
-                // available.y > 0 = unconsumed downward drag (list already at top)
-                if (available.y > 8f) focusRequester.requestFocus()
-                return Offset.Zero
-            }
-        }
-    }
+    // ── Layout ────────────────────────────────────────────────────────────────
 
-    Column(
+    Box(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
-            .statusBarsPadding()
-            .nestedScroll(nestedScrollConnection),
+            .statusBarsPadding(),
     ) {
-        // ── Step 4: home screen content ──────────────────────────────────────
-        // Shown above the search bar; hidden while the user is actively typing.
-        if (uiState.searchQuery.isEmpty()) {
-            ClockSection(
-                time           = uiState.currentTime,
-                date           = uiState.currentDate,
-                onToggleFormat = viewModel::toggleClockFormat,
-            )
-            val filledPins = uiState.pinnedItems.filterNotNull()
-            if (filledPins.isNotEmpty()) {
-                PinnedSection(
-                    items          = uiState.pinnedItems,
-                    onItemClick    = viewModel::onPinnedItemClick,
-                    onItemLongPress = { slot -> viewModel.onPinnedItemLongPress(slot) },
+        HorizontalPager(
+            state    = pagerState,
+            modifier = Modifier.fillMaxSize(),
+        ) { page ->
+            when (page) {
+                0 -> HomeScreenPage(
+                    uiState        = uiState,
+                    onToggleClock  = viewModel::toggleClockFormat,
+                    onPinnedClick  = viewModel::onPinnedItemClick,
+                    onPinnedLong   = viewModel::onPinnedItemLongPress,
+                    onSwipeUp      = viewModel::launchGoogleSearch,
+                )
+                else -> AppDrawerPage(
+                    uiState          = uiState,
+                    listState        = listState,
+                    focusRequester   = focusRequester,
+                    isSearchFocused  = isSearchBarFocused,
+                    onFocusChange    = { isSearchBarFocused = it },
+                    onQueryChange    = viewModel::onSearchQueryChange,
+                    onClear          = { dismissSearch() },
+                    onSortOrder      = viewModel::setSortOrder,
+                    onAppClick       = viewModel::onAppClick,
+                    onAppLongPress   = viewModel::onAppLongPress,
+                    onResultClick    = { result ->
+                        keyboardController?.hide()
+                        viewModel.onSearchResultClick(result)
+                    },
+                    onResultLongPress = { app -> viewModel.onAppLongPress(app) },
+                    onRetry          = viewModel::retryLoadApps,
                 )
             }
         }
-        // ── Step 3: search bar ───────────────────────────────────────────────
-        SearchBar(
-            query = uiState.searchQuery,
-            onQueryChange = viewModel::onSearchQueryChange,
-            onClear = {
-                viewModel.clearSearch()
-                focusManager.clearFocus()
-                keyboardController?.hide()
-            },
-            focusRequester = focusRequester,
-            onFocusChange = { isSearchBarFocused = it },
-        )
-
-        // Sort toggle only visible when not searching.
-        if (uiState.searchQuery.isEmpty()) {
-            SortToggleRow(
-                current = uiState.sortOrder,
-                onToggle = { viewModel.setSortOrder(it) },
-            )
-        }
-
-        when {
-            uiState.isLoading -> CenteredHint("loading...")
-
-            uiState.error != null -> ErrorState(onRetry = viewModel::retryLoadApps)
-
-            // Debounce has settled and produced results — show filtered list.
-            uiState.searchResults.isNotEmpty() -> SearchResultsList(
-                modifier   = Modifier.weight(1f),
-                results    = uiState.searchResults,
-                listState  = listState,
-                onResultClick = { result ->
-                    keyboardController?.hide()
-                    viewModel.onSearchResultClick(result)
-                },
-                onAppLongPress = { app -> viewModel.onAppLongPress(app) },
-            )
-
-            // Full app list is available — show it.
-            // This covers: normal mode AND the 150 ms debounce window while typing,
-            // so the user never sees a jarring "no results" flash mid-keystroke.
-            uiState.apps.isNotEmpty() -> AppList(
-                modifier       = Modifier.weight(1f),
-                apps           = uiState.apps,
-                listState      = listState,
-                onAppClick     = viewModel::onAppClick,
-                onAppLongPress = viewModel::onAppLongPress,
-            )
-
-            // Debounce settled, query was non-blank, but nothing matched.
-            uiState.searchQuery.isNotEmpty() -> CenteredHint("no results")
-
-            else -> CenteredHint("no apps found")
-        }
     }
+
+    // ── Sheets (shown above the pager) ────────────────────────────────────────
 
     if (uiState.selectedApp != null) {
         AppOptionsSheet(
@@ -243,61 +231,260 @@ fun AppDrawerScreen(viewModel: AppDrawerViewModel) {
     }
 }
 
-// ── Search bar ───────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Page 0 — Home screen
+// ─────────────────────────────────────────────────────────────────────────────
+
+@OptIn(ExperimentalFoundationApi::class, ExperimentalFoundationApi::class)
+@Composable
+private fun HomeScreenPage(
+    uiState: AppDrawerUiState,
+    onToggleClock: () -> Unit,
+    onPinnedClick: (PinnedItem) -> Unit,
+    onPinnedLong: (Int) -> Unit,
+    onSwipeUp: () -> Unit,
+) {
+    // Detect a clearly upward swipe without consuming pointer events so the
+    // HorizontalPager can still handle horizontal swipes in this page.
+    var swipeStartX by remember { mutableStateOf(0f) }
+    var swipeStartY by remember { mutableStateOf(0f) }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .pointerInput(onSwipeUp) {
+                awaitPointerEventScope {
+                    while (true) {
+                        // Observe the down event without consuming it.
+                        val down = awaitPointerEvent(PointerEventPass.Initial)
+                        val pos  = down.changes.firstOrNull()?.position ?: continue
+                        swipeStartX = pos.x
+                        swipeStartY = pos.y
+
+                        // Track movement until the finger lifts.
+                        var totalDx = 0f
+                        var totalDy = 0f
+                        while (true) {
+                            val event  = awaitPointerEvent(PointerEventPass.Initial)
+                            val change = event.changes.firstOrNull() ?: break
+                            if (!change.pressed) {
+                                // Finger lifted — decide if this was a swipe-up.
+                                if (totalDy < -120f && abs(totalDy) > abs(totalDx) * 1.5f) {
+                                    onSwipeUp()
+                                }
+                                break
+                            }
+                            totalDx += change.position.x - swipeStartX - totalDx
+                            totalDy += change.position.y - swipeStartY - totalDy
+                            totalDx = change.position.x - swipeStartX
+                            totalDy = change.position.y - swipeStartY
+                        }
+                    }
+                }
+            },
+    ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            ClockSection(
+                time          = uiState.currentTime,
+                date          = uiState.currentDate,
+                onToggleFormat = onToggleClock,
+            )
+
+            if (uiState.pinnedItems.any { it != null }) {
+                PinnedSection(
+                    items          = uiState.pinnedItems,
+                    onItemClick    = onPinnedClick,
+                    onItemLongPress = onPinnedLong,
+                )
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Page 1 — App drawer
+// ─────────────────────────────────────────────────────────────────────────────
+
+@Composable
+private fun AppDrawerPage(
+    uiState: AppDrawerUiState,
+    listState: androidx.compose.foundation.lazy.LazyListState,
+    focusRequester: FocusRequester,
+    isSearchFocused: Boolean,
+    onFocusChange: (Boolean) -> Unit,
+    onQueryChange: (String) -> Unit,
+    onClear: () -> Unit,
+    onSortOrder: (SortOrder) -> Unit,
+    onAppClick: (AppInfo) -> Unit,
+    onAppLongPress: (AppInfo) -> Unit,
+    onResultClick: (SearchResult) -> Unit,
+    onResultLongPress: (AppInfo) -> Unit,
+    onRetry: () -> Unit,
+) {
+    // Pull-down at the top of the list re-focuses the search bar.
+    val nestedScrollConnection = remember(focusRequester) {
+        object : NestedScrollConnection {
+            override fun onPostScroll(
+                consumed: Offset,
+                available: Offset,
+                source: NestedScrollSource,
+            ): Offset {
+                if (available.y > 8f) focusRequester.requestFocus()
+                return Offset.Zero
+            }
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .nestedScroll(nestedScrollConnection),
+    ) {
+        SearchBar(
+            query         = uiState.searchQuery,
+            onQueryChange = onQueryChange,
+            onClear       = onClear,
+            focusRequester = focusRequester,
+            onFocusChange  = onFocusChange,
+        )
+
+        if (uiState.searchQuery.isEmpty()) {
+            SortToggleRow(current = uiState.sortOrder, onToggle = onSortOrder)
+        }
+
+        when {
+            uiState.isLoading -> CenteredHint("loading...")
+
+            uiState.error != null -> ErrorState(onRetry = onRetry)
+
+            uiState.searchResults.isNotEmpty() -> SearchResultsList(
+                modifier       = Modifier.weight(1f),
+                results        = uiState.searchResults,
+                listState      = listState,
+                onResultClick  = onResultClick,
+                onAppLongPress = onResultLongPress,
+            )
+
+            uiState.apps.isNotEmpty() -> AppList(
+                modifier       = Modifier.weight(1f),
+                apps           = uiState.apps,
+                listState      = listState,
+                onAppClick     = onAppClick,
+                onAppLongPress = onAppLongPress,
+            )
+
+            uiState.searchQuery.isNotEmpty() -> CenteredHint("no results")
+
+            else -> CenteredHint("no apps found")
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Step 4 — Home screen composables
+// ─────────────────────────────────────────────────────────────────────────────
+
+@Composable
+private fun ClockSection(
+    time: String,
+    date: String,
+    onToggleFormat: () -> Unit,
+) {
+    if (time.isEmpty()) return
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onToggleFormat)
+            .padding(horizontal = 32.dp)
+            .padding(top = 40.dp, bottom = 20.dp),
+    ) {
+        Text(
+            text  = time,
+            style = MaterialTheme.typography.displayMedium,
+            color = MaterialTheme.colorScheme.onBackground,
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text  = date,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
+        )
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun PinnedSection(
+    items: List<PinnedItem?>,
+    onItemClick: (PinnedItem) -> Unit,
+    onItemLongPress: (Int) -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 32.dp)
+            .padding(bottom = 8.dp),
+    ) {
+        items.forEachIndexed { slot, item ->
+            if (item == null) return@forEachIndexed
+            val label = when (item) {
+                is PinnedItem.App     -> item.label
+                is PinnedItem.Contact -> item.name
+            }
+            AppTextItem(
+                label       = label,
+                onClick     = { onItemClick(item) },
+                onLongClick = { onItemLongPress(slot) },
+                verticalPad = 10.dp,
+            )
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Search bar (Step 3)
+// ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
 private fun SearchBar(
-    query: String,          // from ViewModel — used only to detect external clears
+    query: String,
     onQueryChange: (String) -> Unit,
     onClear: () -> Unit,
     focusRequester: FocusRequester,
     onFocusChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    // FIX 3: Use TextFieldValue locally so the cursor position is preserved
-    // across every recomposition. With plain String, Compose resets the cursor
-    // to 0 on each state update, making the 2nd typed character appear before
-    // the 1st. TextFieldValue carries the cursor/selection as part of the state.
     var fieldValue by remember { mutableStateOf(TextFieldValue(query)) }
 
-    // Sync when the ViewModel clears the query from outside (e.g. after an app
-    // launch). Only reset when the ViewModel explicitly empties the string; do
-    // NOT reset while the user is still typing (rawQuery already matches fieldValue.text).
     LaunchedEffect(query) {
         if (query.isEmpty() && fieldValue.text.isNotEmpty()) {
             fieldValue = TextFieldValue("")
         }
     }
 
-    // FIX 1: Wrap the search bar in its own surface so it is visually distinct
-    // from the app list below. A subtle bottom divider draws the boundary.
     Column(modifier = modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 32.dp)
-                // FIX 2: Symmetric vertical padding so text is never clipped.
                 .padding(vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             BasicTextField(
-                // FIX 3: drive the field with TextFieldValue, not String.
-                value = fieldValue,
+                value         = fieldValue,
                 onValueChange = { newValue ->
-                    fieldValue = newValue           // update cursor + text locally
-                    onQueryChange(newValue.text)    // send text-only to ViewModel
+                    fieldValue = newValue
+                    onQueryChange(newValue.text)
                 },
                 modifier = Modifier
                     .weight(1f)
                     .focusRequester(focusRequester)
                     .onFocusChanged { onFocusChange(it.isFocused) },
-                singleLine = true,
-                textStyle = MaterialTheme.typography.bodyLarge.copy(
+                singleLine    = true,
+                textStyle     = MaterialTheme.typography.bodyLarge.copy(
                     color = MaterialTheme.colorScheme.onBackground,
                 ),
-                // BasicTextField defaults to SolidColor(Color.Black), which is
-                // invisible on dark backgrounds. Match the text colour instead.
-                cursorBrush = SolidColor(MaterialTheme.colorScheme.onBackground),
+                cursorBrush   = SolidColor(MaterialTheme.colorScheme.onBackground),
                 keyboardOptions = KeyboardOptions(
                     capitalization = KeyboardCapitalization.None,
                     autoCorrect    = false,
@@ -305,8 +492,6 @@ private fun SearchBar(
                     imeAction      = ImeAction.Search,
                 ),
                 decorationBox = { innerTextField ->
-                    // FIX 2: fillMaxWidth + vertical padding inside decorationBox
-                    // so the placeholder text has room and is never clipped.
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -336,8 +521,6 @@ private fun SearchBar(
                 )
             }
         }
-
-        // FIX 1: Thin divider line that separates the search bar from the list.
         HorizontalDivider(
             color     = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.08f),
             thickness = 1.dp,
@@ -345,9 +528,49 @@ private fun SearchBar(
     }
 }
 
-// ── Search results list ───────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Shared press-feedback item (Steps 2, 3, 4)
+// A scale-spring + ripple combination makes taps and long-presses clearly felt.
+// ─────────────────────────────────────────────────────────────────────────────
 
 @OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun AppTextItem(
+    label: String,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    verticalPad: androidx.compose.ui.unit.Dp = 14.dp,
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed) 0.96f else 1f,
+        animationSpec = spring(stiffness = 600f),
+        label = "item_scale",
+    )
+
+    Text(
+        text  = label,
+        style = MaterialTheme.typography.bodyLarge,
+        color = MaterialTheme.colorScheme.onBackground,
+        modifier = modifier
+            .fillMaxWidth()
+            .graphicsLayer { scaleX = scale; scaleY = scale }
+            .combinedClickable(
+                interactionSource = interactionSource,
+                indication        = LocalIndication.current,
+                onClick           = onClick,
+                onLongClick       = onLongClick,
+            )
+            .padding(horizontal = 32.dp, vertical = verticalPad),
+    )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Search results list (Step 3)
+// ─────────────────────────────────────────────────────────────────────────────
+
 @Composable
 private fun SearchResultsList(
     modifier: Modifier,
@@ -356,10 +579,7 @@ private fun SearchResultsList(
     onResultClick: (SearchResult) -> Unit,
     onAppLongPress: (AppInfo) -> Unit,
 ) {
-    if (results.isEmpty()) {
-        CenteredHint("no results")
-        return
-    }
+    if (results.isEmpty()) { CenteredHint("no results"); return }
 
     LazyColumn(modifier = modifier, state = listState) {
         items(results, key = { result ->
@@ -369,10 +589,16 @@ private fun SearchResultsList(
                 is SearchResult.Setting -> "setting_${result.label}"
             }
         }) { result ->
-            SearchResultItem(
-                result        = result,
-                onClick       = { onResultClick(result) },
-                onLongPress   = { if (result is SearchResult.App) onAppLongPress(result.info) },
+            val (label, hint) = when (result) {
+                is SearchResult.App     -> result.info.label to null
+                is SearchResult.Contact -> result.name        to "call"
+                is SearchResult.Setting -> result.label       to "settings"
+            }
+            SearchResultRow(
+                label       = label,
+                hint        = hint,
+                onClick     = { onResultClick(result) },
+                onLongClick = { if (result is SearchResult.App) onAppLongPress(result.info) },
             )
         }
         item { Spacer(Modifier.height(32.dp)) }
@@ -381,21 +607,30 @@ private fun SearchResultsList(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun SearchResultItem(
-    result: SearchResult,
+private fun SearchResultRow(
+    label: String,
+    hint: String?,
     onClick: () -> Unit,
-    onLongPress: () -> Unit,
+    onLongClick: () -> Unit,
 ) {
-    val (label, hint) = when (result) {
-        is SearchResult.App     -> result.info.label to null
-        is SearchResult.Contact -> result.name        to "call"
-        is SearchResult.Setting -> result.label       to "settings"
-    }
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed) 0.97f else 1f,
+        animationSpec = spring(stiffness = 600f),
+        label = "result_scale",
+    )
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .combinedClickable(onClick = onClick, onLongClick = onLongPress)
+            .graphicsLayer { scaleX = scale; scaleY = scale }
+            .combinedClickable(
+                interactionSource = interactionSource,
+                indication        = LocalIndication.current,
+                onClick           = onClick,
+                onLongClick       = onLongClick,
+            )
             .padding(horizontal = 32.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -415,9 +650,10 @@ private fun SearchResultItem(
     }
 }
 
-// ── Normal app list ───────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Normal app list (Step 2)
+// ─────────────────────────────────────────────────────────────────────────────
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun AppList(
     modifier: Modifier,
@@ -428,31 +664,24 @@ private fun AppList(
 ) {
     LazyColumn(modifier = modifier, state = listState) {
         items(apps, key = { it.packageName }) { app ->
-            Text(
-                text  = app.label,
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onBackground,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .combinedClickable(
-                        onClick     = { onAppClick(app) },
-                        onLongClick = { onAppLongPress(app) },
-                    )
-                    .padding(horizontal = 32.dp, vertical = 14.dp),
+            AppTextItem(
+                label       = app.label,
+                onClick     = { onAppClick(app) },
+                onLongClick = { onAppLongPress(app) },
             )
         }
         item { Spacer(Modifier.height(32.dp)) }
     }
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
 private fun CenteredHint(text: String) {
     Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(120.dp),
+        modifier         = Modifier.fillMaxWidth().height(120.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(
@@ -466,7 +695,7 @@ private fun CenteredHint(text: String) {
 @Composable
 private fun ErrorState(onRetry: () -> Unit) {
     Box(
-        modifier = Modifier.fillMaxWidth().height(160.dp),
+        modifier         = Modifier.fillMaxWidth().height(160.dp),
         contentAlignment = Alignment.Center,
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -511,78 +740,49 @@ private fun SortLabel(text: String, active: Boolean, onClick: () -> Unit) {
     Text(
         text  = text,
         style = MaterialTheme.typography.labelSmall,
-        color = if (active)
-            MaterialTheme.colorScheme.onBackground
-        else
-            MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f),
-        modifier = Modifier
-            .clickable(onClick = onClick)
-            .padding(4.dp),
+        color = if (active) MaterialTheme.colorScheme.onBackground
+                else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f),
+        modifier = Modifier.clickable(onClick = onClick).padding(4.dp),
     )
 }
 
-// ── Step 4 composables ────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Bottom sheets (Steps 2, 4)
+// ─────────────────────────────────────────────────────────────────────────────
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ClockSection(
-    time: String,
-    date: String,
-    onToggleFormat: () -> Unit,
+private fun AppOptionsSheet(
+    app: AppInfo,
+    canPin: Boolean,
+    onPin: (AppInfo) -> Unit,
+    onHide: (AppInfo) -> Unit,
+    onDismiss: () -> Unit,
 ) {
-    if (time.isEmpty()) return   // clock not yet initialised — skip for one frame
-
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onToggleFormat)
-            .padding(horizontal = 32.dp)
-            .padding(top = 40.dp, bottom = 20.dp),
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState       = sheetState,
+        containerColor   = MaterialTheme.colorScheme.surface,
     ) {
-        Text(
-            text  = time,
-            style = MaterialTheme.typography.displayMedium,
-            color = MaterialTheme.colorScheme.onBackground,
-        )
-        Spacer(Modifier.height(4.dp))
-        Text(
-            text  = date,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
-        )
-    }
-}
-
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-private fun PinnedSection(
-    items: List<PinnedItem?>,
-    onItemClick: (PinnedItem) -> Unit,
-    onItemLongPress: (Int) -> Unit,
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 32.dp)
-            .padding(bottom = 8.dp),
-    ) {
-        items.forEachIndexed { slot, item ->
-            if (item == null) return@forEachIndexed
-            val label = when (item) {
-                is PinnedItem.App     -> item.label
-                is PinnedItem.Contact -> item.name
-            }
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 32.dp)
+                .padding(bottom = 32.dp),
+        ) {
             Text(
-                text  = label,
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onBackground,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .combinedClickable(
-                        onClick     = { onItemClick(item) },
-                        onLongClick = { onItemLongPress(slot) },
-                    )
-                    .padding(vertical = 10.dp),
+                text  = app.label,
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.onSurface,
             )
+            Spacer(Modifier.height(16.dp))
+            HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))
+            Spacer(Modifier.height(8.dp))
+            if (canPin) SheetAction("pin")      { onPin(app) }
+            SheetAction("hide")     { onHide(app) }
+            SheetAction("group")    { /* future */ }
+            SheetAction("restrict") { /* Step 9 */ }
         }
     }
 }
@@ -624,52 +824,9 @@ private fun PinnedItemSheet(
     }
 }
 
-// ── Bottom sheet ──────────────────────────────────────────────────────────────
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun AppOptionsSheet(
-    app: AppInfo,
-    canPin: Boolean,
-    onPin: (AppInfo) -> Unit,
-    onHide: (AppInfo) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState       = sheetState,
-        containerColor   = MaterialTheme.colorScheme.surface,
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 32.dp)
-                .padding(bottom = 32.dp),
-        ) {
-            Text(
-                text  = app.label,
-                style = MaterialTheme.typography.titleLarge,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Spacer(Modifier.height(16.dp))
-            HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))
-            Spacer(Modifier.height(8.dp))
-            if (canPin) SheetAction("pin") { onPin(app) }
-            SheetAction("hide")     { onHide(app) }
-            SheetAction("group")    { /* future */ }
-            SheetAction("restrict") { /* Step 9 */ }
-        }
-    }
-}
-
 @Composable
 private fun SheetAction(label: String, onClick: () -> Unit) {
-    TextButton(
-        onClick  = onClick,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
+    TextButton(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
         Text(
             text     = label,
             style    = MaterialTheme.typography.bodyLarge,

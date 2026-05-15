@@ -48,7 +48,7 @@ class MainActivity : ComponentActivity() {
     // Clear the search so the drawer is clean next time.
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        viewModel.clearSearch()
+        viewModel.goHome()   // clear search + signal pager to return to home page
     }
 
     private fun suppressBackButton() {

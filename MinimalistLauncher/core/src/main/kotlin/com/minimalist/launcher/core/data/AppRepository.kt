@@ -49,4 +49,24 @@ class AppRepository(private val context: Context) {
             Log.w("AppRepository", "Settings action not available: $action")
         }
     }
+
+    fun launchGoogleSearch() {
+        // Prefer the Google quicksearch activity; fall back to browser.
+        val pm = context.packageManager
+        val googlePkg = "com.google.android.googlequicksearchbox"
+        val primary = pm.getLaunchIntentForPackage(googlePkg)
+            ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        if (primary != null) {
+            try { context.startActivity(primary); return }
+            catch (_: ActivityNotFoundException) { }
+        }
+        try {
+            context.startActivity(
+                Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com"))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        } catch (e: ActivityNotFoundException) {
+            Log.w("AppRepository", "No browser for Google fallback")
+        }
+    }
 }

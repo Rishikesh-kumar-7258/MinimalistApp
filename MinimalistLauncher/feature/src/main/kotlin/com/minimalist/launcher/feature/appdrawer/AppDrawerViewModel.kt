@@ -15,8 +15,11 @@ import com.minimalist.launcher.core.model.SearchResult
 import com.minimalist.launcher.core.model.SortOrder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.flatMapLatest
@@ -291,6 +294,19 @@ class AppDrawerViewModel(
             preferencesRepository.setClockFormat(next)
         }
     }
+
+    // ── Navigation ───────────────────────────────────────────────────────────
+
+    private val _navigateToHome = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val navigateToHome: SharedFlow<Unit> = _navigateToHome.asSharedFlow()
+
+    // Called from onNewIntent (Home button pressed) — clear search AND go home.
+    fun goHome() {
+        clearSearch()
+        _navigateToHome.tryEmit(Unit)
+    }
+
+    fun launchGoogleSearch() = appRepository.launchGoogleSearch()
 
     // ── Factory ─────────────────────────────────────────────────────────────
 
