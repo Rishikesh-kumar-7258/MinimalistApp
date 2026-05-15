@@ -1,6 +1,7 @@
 package com.minimalist.launcher
 
 import android.app.role.RoleManager
+import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -25,7 +26,7 @@ class MainActivity : ComponentActivity() {
 
     private val viewModel: AppDrawerViewModel by viewModels {
         val app = application as LauncherApplication
-        AppDrawerViewModel.Factory(app.appRepository, app.preferencesRepository)
+        AppDrawerViewModel.Factory(app.appRepository, app.preferencesRepository, app.contactsRepository)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -41,6 +42,13 @@ class MainActivity : ComponentActivity() {
         }
 
         promptSetDefaultLauncherIfNeeded()
+    }
+
+    // Called when the user presses Home while this IS the home screen (singleTask).
+    // Clear the search so the drawer is clean next time.
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        viewModel.clearSearch()
     }
 
     private fun suppressBackButton() {

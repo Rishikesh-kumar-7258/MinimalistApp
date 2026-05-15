@@ -1,8 +1,11 @@
 package com.minimalist.launcher.core.data
 
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
+import android.util.Log
 import com.minimalist.launcher.core.model.AppInfo
 
 class AppRepository(private val context: Context) {
@@ -26,5 +29,24 @@ class AppRepository(private val context: Context) {
         context.packageManager.getLaunchIntentForPackage(packageName)
             ?.also { it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
             ?.let { context.startActivity(it) }
+    }
+
+    fun launchContact(phoneNumber: String) {
+        val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:$phoneNumber"))
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        try {
+            context.startActivity(intent)
+        } catch (e: ActivityNotFoundException) {
+            Log.w("AppRepository", "No dialer found for $phoneNumber")
+        }
+    }
+
+    fun launchSetting(action: String) {
+        val intent = Intent(action).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        try {
+            context.startActivity(intent)
+        } catch (e: ActivityNotFoundException) {
+            Log.w("AppRepository", "Settings action not available: $action")
+        }
     }
 }
