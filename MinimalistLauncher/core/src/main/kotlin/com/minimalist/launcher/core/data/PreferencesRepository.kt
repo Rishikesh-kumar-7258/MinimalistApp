@@ -10,6 +10,9 @@ import com.minimalist.launcher.core.model.AppFontFamily
 import com.minimalist.launcher.core.model.AppearanceSettings
 import com.minimalist.launcher.core.model.ClockFormat
 import com.minimalist.launcher.core.model.FontSize
+import com.minimalist.launcher.core.model.GestureAction
+import com.minimalist.launcher.core.model.GestureSettings
+import com.minimalist.launcher.core.model.GestureType
 import com.minimalist.launcher.core.model.PinnedItem
 import com.minimalist.launcher.core.model.SortOrder
 import com.minimalist.launcher.core.model.TextAlignment
@@ -40,6 +43,12 @@ class PreferencesRepository(private val dataStore: DataStore<Preferences>) {
         private val WEATHER_API_KEY   = stringPreferencesKey("weather_api_key")
         private val WEATHER_CITY      = stringPreferencesKey("weather_city")
         private val WEATHER_CACHE     = stringPreferencesKey("weather_cache")
+        // Step 7 keys
+        private val GESTURE_SWIPE_UP    = stringPreferencesKey("gesture_swipe_up")
+        private val GESTURE_SWIPE_DOWN  = stringPreferencesKey("gesture_swipe_down")
+        private val GESTURE_SWIPE_LEFT  = stringPreferencesKey("gesture_swipe_left")
+        private val GESTURE_SWIPE_RIGHT = stringPreferencesKey("gesture_swipe_right")
+        private val GESTURE_DOUBLE_TAP  = stringPreferencesKey("gesture_double_tap")
     }
 
     val hiddenApps: Flow<Set<String>> =
@@ -201,6 +210,33 @@ class PreferencesRepository(private val dataStore: DataStore<Preferences>) {
     suspend fun setWeatherCache(line: String?) {
         dataStore.edit { prefs ->
             if (line != null) prefs[WEATHER_CACHE] = line else prefs.remove(WEATHER_CACHE)
+        }
+    }
+
+    // ── Step 7: gesture mappings ──────────────────────────────────────────────
+
+    val gestureSettings: Flow<GestureSettings> = dataStore.data.map { prefs ->
+        fun action(key: androidx.datastore.preferences.core.Preferences.Key<String>, default: GestureAction): GestureAction =
+            runCatching { GestureAction.valueOf(prefs[key] ?: "") }.getOrDefault(default)
+        GestureSettings(
+            swipeUp    = action(GESTURE_SWIPE_UP,    GestureAction.APP_DRAWER),
+            swipeDown  = action(GESTURE_SWIPE_DOWN,  GestureAction.SEARCH),
+            swipeLeft  = action(GESTURE_SWIPE_LEFT,  GestureAction.NONE),
+            swipeRight = action(GESTURE_SWIPE_RIGHT, GestureAction.NONE),
+            doubleTap  = action(GESTURE_DOUBLE_TAP,  GestureAction.SCRATCH_PAD),
+        )
+    }
+
+    suspend fun setGestureAction(type: GestureType, action: GestureAction) {
+        dataStore.edit { prefs ->
+            val key = when (type) {
+                GestureType.SWIPE_UP    -> GESTURE_SWIPE_UP
+                GestureType.SWIPE_DOWN  -> GESTURE_SWIPE_DOWN
+                GestureType.SWIPE_LEFT  -> GESTURE_SWIPE_LEFT
+                GestureType.SWIPE_RIGHT -> GESTURE_SWIPE_RIGHT
+                GestureType.DOUBLE_TAP  -> GESTURE_DOUBLE_TAP
+            }
+            prefs[key] = action.name
         }
     }
 

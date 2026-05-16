@@ -1,6 +1,7 @@
 package com.minimalist.launcher.feature.appdrawer
 
 import com.minimalist.launcher.core.model.AppInfo
+import com.minimalist.launcher.core.model.GestureSettings
 import com.minimalist.launcher.core.model.PinnedItem
 import com.minimalist.launcher.core.model.SearchResult
 import com.minimalist.launcher.core.model.SortOrder
@@ -23,4 +24,6 @@ data class AppDrawerUiState(
     // ── Widgets (Step 6) ─────────────────────────────────────────────────────
     val weatherLine: String? = null,    // null = hidden (disabled or no data)
     val calendarLine: String? = null,   // null = hidden (disabled or no permission)
+    // ── Gestures (Step 7) ────────────────────────────────────────────────────
+    val gestureSettings: GestureSettings = GestureSettings(),
 )

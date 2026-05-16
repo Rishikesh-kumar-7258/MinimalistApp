@@ -158,6 +158,11 @@ class AppDrawerViewModel(
 
     private val widgetState = combine(weatherLine, calendarLine) { w, c -> w to c }
 
+    // ── Gestures (Step 7) ────────────────────────────────────────────────────
+
+    private val gestureSettings = preferencesRepository.gestureSettings
+        .stateIn(viewModelScope, SharingStarted.Lazily, com.minimalist.launcher.core.model.GestureSettings())
+
     // ── Combined UI state ────────────────────────────────────────────────────
 
     private val rawUiState = combine(
@@ -202,15 +207,16 @@ class AppDrawerViewModel(
         }
     }.flowOn(Dispatchers.Default)
 
-    val uiState = combine(rawUiState, homeState, widgetState) { base, (clock, pins), (weather, calendar) ->
+    val uiState = combine(rawUiState, homeState, widgetState, gestureSettings) { base, (clock, pins), (weather, calendar), gestures ->
         val (time, date, use24h) = clock
         base.copy(
-            currentTime  = time,
-            currentDate  = date,
-            use24h       = use24h,
-            pinnedItems  = pins,
-            weatherLine  = weather,
-            calendarLine = calendar,
+            currentTime     = time,
+            currentDate     = date,
+            use24h          = use24h,
+            pinnedItems     = pins,
+            weatherLine     = weather,
+            calendarLine    = calendar,
+            gestureSettings = gestures,
         )
     }.stateIn(
         scope        = viewModelScope,
@@ -318,6 +324,8 @@ class AppDrawerViewModel(
     }
 
     fun launchGoogleSearch() = appRepository.launchGoogleSearch()
+
+    fun launchDialer() = appRepository.launchDialer()
 
     // ── Factory ─────────────────────────────────────────────────────────────
 

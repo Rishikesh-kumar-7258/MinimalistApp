@@ -31,6 +31,12 @@ class AppRepository(private val context: Context) {
             ?.let { context.startActivity(it) }
     }
 
+    fun launchDialer() {
+        val intent = Intent(Intent.ACTION_DIAL).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        try { context.startActivity(intent) }
+        catch (e: ActivityNotFoundException) { Log.w("AppRepository", "No dialer app found") }
+    }
+
     fun launchContact(phoneNumber: String) {
         val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:$phoneNumber"))
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)

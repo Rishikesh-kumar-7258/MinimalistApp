@@ -69,6 +69,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.text.style.TextAlign
 import com.minimalist.launcher.core.model.AppInfo
+import com.minimalist.launcher.core.model.GestureAction
+import com.minimalist.launcher.core.model.GestureSettings
 import com.minimalist.launcher.core.model.PinnedItem
 import com.minimalist.launcher.core.model.SearchResult
 import com.minimalist.launcher.core.model.SortOrder
@@ -100,7 +102,9 @@ fun AppDrawerScreen(viewModel: AppDrawerViewModel, onOpenSettings: () -> Unit = 
     val listState      = rememberLazyListState()
     val focusRequester = remember { FocusRequester() }
 
-    var isSearchBarFocused by remember { mutableStateOf(false) }
+    var isSearchBarFocused   by remember { mutableStateOf(false) }
+    // Signals the drawer page to auto-focus the search bar after navigation.
+    var pendingFocusSearch   by remember { mutableStateOf(false) }
 
     // ── Focus helpers ─────────────────────────────────────────────────────────
 
@@ -113,6 +117,22 @@ fun AppDrawerScreen(viewModel: AppDrawerViewModel, onOpenSettings: () -> Unit = 
     fun goHome() {
         dismissSearch()
         scope.launch { pagerState.animateScrollToPage(0) }
+    }
+
+    // ── Gesture dispatcher ────────────────────────────────────────────────────
+
+    fun onGesture(action: GestureAction) {
+        when (action) {
+            GestureAction.NONE        -> { /* no-op */ }
+            GestureAction.APP_DRAWER  -> scope.launch { pagerState.animateScrollToPage(1) }
+            GestureAction.SEARCH      -> {
+                pendingFocusSearch = true
+                scope.launch { pagerState.animateScrollToPage(1) }
+            }
+            GestureAction.DIALER      -> viewModel.launchDialer()
+            GestureAction.SCRATCH_PAD -> { /* Step 10 placeholder */ }
+            GestureAction.RECENT_APPS -> { /* Step 9 placeholder */ }
+        }
     }
 
     // ── Back handler ──────────────────────────────────────────────────────────
@@ -144,6 +164,14 @@ fun AppDrawerScreen(viewModel: AppDrawerViewModel, onOpenSettings: () -> Unit = 
         if (pagerState.currentPage == 0) {
             focusManager.clearFocus()
             keyboardController?.hide()
+        }
+    }
+
+    // When we land on page 1 with a pending search focus, claim it.
+    LaunchedEffect(pagerState.currentPage, pendingFocusSearch) {
+        if (pagerState.currentPage == 1 && pendingFocusSearch) {
+            pendingFocusSearch = false
+            focusRequester.requestFocus()
         }
     }
 
@@ -191,12 +219,12 @@ fun AppDrawerScreen(viewModel: AppDrawerViewModel, onOpenSettings: () -> Unit = 
         ) { page ->
             when (page) {
                 0 -> HomeScreenPage(
-                    uiState        = uiState,
-                    onToggleClock  = viewModel::toggleClockFormat,
-                    onPinnedClick  = viewModel::onPinnedItemClick,
-                    onPinnedLong   = viewModel::onPinnedItemLongPress,
-                    onSwipeUp      = viewModel::launchGoogleSearch,
-                    onOpenSettings = onOpenSettings,
+                    uiState         = uiState,
+                    onToggleClock   = viewModel::toggleClockFormat,
+                    onPinnedClick   = viewModel::onPinnedItemClick,
+                    onPinnedLong    = viewModel::onPinnedItemLongPress,
+                    onGesture       = ::onGesture,
+                    onOpenSettings  = onOpenSettings,
                 )
                 else -> AppDrawerPage(
                     uiState          = uiState,
@@ -252,43 +280,63 @@ private fun HomeScreenPage(
     onToggleClock: () -> Unit,
     onPinnedClick: (PinnedItem) -> Unit,
     onPinnedLong: (Int) -> Unit,
-    onSwipeUp: () -> Unit,
+    onGesture: (GestureAction) -> Unit,
     onOpenSettings: () -> Unit,
 ) {
-    // Detect a clearly upward swipe without consuming pointer events so the
-    // HorizontalPager can still handle horizontal swipes in this page.
-    var swipeStartX by remember { mutableStateOf(0f) }
-    var swipeStartY by remember { mutableStateOf(0f) }
+    val gestures = uiState.gestureSettings
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .pointerInput(onSwipeUp) {
+            // Observe touches without consuming so HorizontalPager still handles
+            // horizontal swipes for page navigation.
+            .pointerInput(gestures) {
+                val swipeThresholdPx = 80.dp.toPx()
+                val tapMaxMovePx     = 20f
+                val doubleTapMs      = 400L
+                var lastTapTime      = -1L
+
                 awaitPointerEventScope {
                     while (true) {
-                        // Observe the down event without consuming it.
-                        val down = awaitPointerEvent(PointerEventPass.Initial)
-                        val pos  = down.changes.firstOrNull()?.position ?: continue
-                        swipeStartX = pos.x
-                        swipeStartY = pos.y
+                        val down       = awaitPointerEvent(PointerEventPass.Initial)
+                        val downChange = down.changes.firstOrNull() ?: continue
+                        if (!downChange.pressed) continue   // skip non-down events
 
-                        // Track movement until the finger lifts.
-                        var totalDx = 0f
-                        var totalDy = 0f
+                        val startPos  = downChange.position
+                        val startTime = System.currentTimeMillis()
+                        var endPos    = startPos
+
+                        // Track until finger lifts.
                         while (true) {
                             val event  = awaitPointerEvent(PointerEventPass.Initial)
                             val change = event.changes.firstOrNull() ?: break
-                            if (!change.pressed) {
-                                // Finger lifted — decide if this was a swipe-up.
-                                if (totalDy < -120f && abs(totalDy) > abs(totalDx) * 1.5f) {
-                                    onSwipeUp()
-                                }
-                                break
+                            endPos = change.position
+                            if (!change.pressed) break
+                        }
+
+                        val dx    = endPos.x - startPos.x
+                        val dy    = endPos.y - startPos.y
+                        val absDx = abs(dx)
+                        val absDy = abs(dy)
+                        val elapsed = System.currentTimeMillis() - startTime
+
+                        if (absDx < tapMaxMovePx && absDy < tapMaxMovePx && elapsed < 300) {
+                            // Tap — check for double-tap
+                            val now = System.currentTimeMillis()
+                            if (lastTapTime > 0 && now - lastTapTime < doubleTapMs) {
+                                onGesture(gestures.doubleTap)
+                                lastTapTime = -1
+                            } else {
+                                lastTapTime = now
                             }
-                            totalDx += change.position.x - swipeStartX - totalDx
-                            totalDy += change.position.y - swipeStartY - totalDy
-                            totalDx = change.position.x - swipeStartX
-                            totalDy = change.position.y - swipeStartY
+                        } else {
+                            lastTapTime = -1
+                            when {
+                                absDy > absDx * 1.5f && dy < -swipeThresholdPx -> onGesture(gestures.swipeUp)
+                                absDy > absDx * 1.5f && dy >  swipeThresholdPx -> onGesture(gestures.swipeDown)
+                                absDx > absDy * 1.5f && dx < -swipeThresholdPx -> onGesture(gestures.swipeLeft)
+                                absDx > absDy * 1.5f && dx >  swipeThresholdPx -> onGesture(gestures.swipeRight)
+                            }
                         }
                     }
                 }

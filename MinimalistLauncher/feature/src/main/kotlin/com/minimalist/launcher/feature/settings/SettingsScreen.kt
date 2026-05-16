@@ -50,6 +50,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.minimalist.launcher.core.model.AppFontFamily
 import com.minimalist.launcher.core.model.ClockFormat
 import com.minimalist.launcher.core.model.FontSize
+import com.minimalist.launcher.core.model.GestureAction
+import com.minimalist.launcher.core.model.GestureType
 import com.minimalist.launcher.core.model.SortOrder
 import com.minimalist.launcher.core.model.TextAlignment
 import com.minimalist.launcher.core.model.ThemeMode
@@ -283,6 +285,35 @@ fun SettingsScreen(viewModel: SettingsViewModel, onBack: () -> Unit) {
                         if (opt == "12h") ClockFormat.HOUR_12 else ClockFormat.HOUR_24
                     )
                 },
+            )
+        }
+
+        Spacer(Modifier.height(32.dp))
+        HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.08f))
+        Spacer(Modifier.height(24.dp))
+
+        // ── GESTURES ──────────────────────────────────────────────────────────
+        SectionHeader("gestures")
+
+        val gestures = uiState.gestureSettings
+        listOf(
+            "swipe up"    to GestureType.SWIPE_UP,
+            "swipe down"  to GestureType.SWIPE_DOWN,
+            "swipe left"  to GestureType.SWIPE_LEFT,
+            "swipe right" to GestureType.SWIPE_RIGHT,
+            "double tap"  to GestureType.DOUBLE_TAP,
+        ).forEach { (label, type) ->
+            val current = when (type) {
+                GestureType.SWIPE_UP    -> gestures.swipeUp
+                GestureType.SWIPE_DOWN  -> gestures.swipeDown
+                GestureType.SWIPE_LEFT  -> gestures.swipeLeft
+                GestureType.SWIPE_RIGHT -> gestures.swipeRight
+                GestureType.DOUBLE_TAP  -> gestures.doubleTap
+            }
+            GestureRow(
+                label    = label,
+                current  = current,
+                onSelect = { action -> viewModel.setGestureAction(type, action) },
             )
         }
 
@@ -601,6 +632,43 @@ private fun OptionGroup(options: List<String>, selected: String, onSelect: (Stri
                     .clickable { onSelect(opt) }
                     .padding(4.dp),
             )
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Gesture row (Step 7)
+// ─────────────────────────────────────────────────────────────────────────────
+
+@Composable
+private fun GestureRow(label: String, current: GestureAction, onSelect: (GestureAction) -> Unit) {
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+        Text(
+            text  = label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onBackground,
+        )
+        Spacer(Modifier.height(6.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            GestureAction.entries.forEach { action ->
+                val tag = when (action) {
+                    GestureAction.NONE        -> "—"
+                    GestureAction.APP_DRAWER  -> "drawer"
+                    GestureAction.SEARCH      -> "search"
+                    GestureAction.DIALER      -> "dialer"
+                    GestureAction.SCRATCH_PAD -> "pad"
+                    GestureAction.RECENT_APPS -> "recents"
+                }
+                Text(
+                    text  = tag,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (action == current)
+                        MaterialTheme.colorScheme.onBackground
+                    else
+                        MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f),
+                    modifier = Modifier.clickable { onSelect(action) }.padding(4.dp),
+                )
+            }
         }
     }
 }

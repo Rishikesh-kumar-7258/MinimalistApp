@@ -2,6 +2,7 @@ package com.minimalist.launcher.feature.settings
 
 import com.minimalist.launcher.core.model.AppearanceSettings
 import com.minimalist.launcher.core.model.ClockFormat
+import com.minimalist.launcher.core.model.GestureSettings
 import com.minimalist.launcher.core.model.SortOrder
 
 data class SettingsUiState(
@@ -14,4 +15,6 @@ data class SettingsUiState(
     val calendarEnabled: Boolean = false,
     val weatherApiKey: String = "",
     val weatherCity: String = "",
+    // Step 7
+    val gestureSettings: GestureSettings = GestureSettings(),
 )

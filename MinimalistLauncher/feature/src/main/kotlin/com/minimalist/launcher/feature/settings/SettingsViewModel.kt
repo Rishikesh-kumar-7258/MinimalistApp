@@ -7,6 +7,8 @@ import com.minimalist.launcher.core.data.PreferencesRepository
 import com.minimalist.launcher.core.model.AppFontFamily
 import com.minimalist.launcher.core.model.ClockFormat
 import com.minimalist.launcher.core.model.FontSize
+import com.minimalist.launcher.core.model.GestureAction
+import com.minimalist.launcher.core.model.GestureType
 import com.minimalist.launcher.core.model.SortOrder
 import com.minimalist.launcher.core.model.TextAlignment
 import com.minimalist.launcher.core.model.ThemeMode
@@ -42,15 +44,17 @@ class SettingsViewModel(private val prefs: PreferencesRepository) : ViewModel() 
         prefs.sortOrder,
         prefs.clockFormat,
         widgetPrefs,
-    ) { appearance, sort, clock, widget ->
+        prefs.gestureSettings,
+    ) { appearance, sort, clock, widget, gestures ->
         SettingsUiState(
-            appearance      = appearance,
-            sortOrder       = sort,
-            clockFormat     = clock,
-            weatherEnabled  = widget.weatherEnabled,
-            calendarEnabled = widget.calendarEnabled,
-            weatherApiKey   = widget.weatherApiKey,
-            weatherCity     = widget.weatherCity,
+            appearance       = appearance,
+            sortOrder        = sort,
+            clockFormat      = clock,
+            weatherEnabled   = widget.weatherEnabled,
+            calendarEnabled  = widget.calendarEnabled,
+            weatherApiKey    = widget.weatherApiKey,
+            weatherCity      = widget.weatherCity,
+            gestureSettings  = gestures,
         )
     }.stateIn(viewModelScope, SharingStarted.Lazily, SettingsUiState())
 
@@ -96,6 +100,12 @@ class SettingsViewModel(private val prefs: PreferencesRepository) : ViewModel() 
     // Called explicitly from the UI when the user taps "fetch now".
     fun fetchWeatherNow() = viewModelScope.launch {
         triggerFetchIfReady()
+    }
+
+    // ── Gestures (Step 7) ─────────────────────────────────────────────────────
+
+    fun setGestureAction(type: GestureType, action: GestureAction) = viewModelScope.launch {
+        prefs.setGestureAction(type, action)
     }
 
     private suspend fun triggerFetchIfReady() {
