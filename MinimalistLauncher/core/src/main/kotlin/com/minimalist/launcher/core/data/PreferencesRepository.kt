@@ -2,6 +2,7 @@ package com.minimalist.launcher.core.data
 
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
@@ -33,6 +34,12 @@ class PreferencesRepository(private val dataStore: DataStore<Preferences>) {
         private val TEXT_ALIGNMENT    = stringPreferencesKey("text_alignment")
         private val BG_COLOR          = stringPreferencesKey("bg_color")
         private val TEXT_COLOR        = stringPreferencesKey("text_color")
+        // Step 6 keys
+        private val WEATHER_ENABLED   = booleanPreferencesKey("weather_enabled")
+        private val CALENDAR_ENABLED  = booleanPreferencesKey("calendar_enabled")
+        private val WEATHER_API_KEY   = stringPreferencesKey("weather_api_key")
+        private val WEATHER_CITY      = stringPreferencesKey("weather_city")
+        private val WEATHER_CACHE     = stringPreferencesKey("weather_cache")
     }
 
     val hiddenApps: Flow<Set<String>> =
@@ -164,6 +171,36 @@ class PreferencesRepository(private val dataStore: DataStore<Preferences>) {
         dataStore.edit { prefs ->
             if (bg != null) prefs[BG_COLOR] = bg else prefs.remove(BG_COLOR)
             if (text != null) prefs[TEXT_COLOR] = text else prefs.remove(TEXT_COLOR)
+        }
+    }
+
+    // ── Step 6: widget preferences ────────────────────────────────────────────
+
+    val weatherEnabled: Flow<Boolean>  = dataStore.data.map { it[WEATHER_ENABLED]  ?: false }
+    val calendarEnabled: Flow<Boolean> = dataStore.data.map { it[CALENDAR_ENABLED] ?: false }
+    val weatherApiKey: Flow<String>    = dataStore.data.map { it[WEATHER_API_KEY]  ?: "" }
+    val weatherCity: Flow<String>      = dataStore.data.map { it[WEATHER_CITY]     ?: "" }
+    val weatherCache: Flow<String?>    = dataStore.data.map { it[WEATHER_CACHE] }
+
+    suspend fun setWeatherEnabled(enabled: Boolean) {
+        dataStore.edit { it[WEATHER_ENABLED] = enabled }
+    }
+
+    suspend fun setCalendarEnabled(enabled: Boolean) {
+        dataStore.edit { it[CALENDAR_ENABLED] = enabled }
+    }
+
+    suspend fun setWeatherApiKey(key: String) {
+        dataStore.edit { it[WEATHER_API_KEY] = key.trim() }
+    }
+
+    suspend fun setWeatherCity(city: String) {
+        dataStore.edit { it[WEATHER_CITY] = city.trim() }
+    }
+
+    suspend fun setWeatherCache(line: String?) {
+        dataStore.edit { prefs ->
+            if (line != null) prefs[WEATHER_CACHE] = line else prefs.remove(WEATHER_CACHE)
         }
     }
 

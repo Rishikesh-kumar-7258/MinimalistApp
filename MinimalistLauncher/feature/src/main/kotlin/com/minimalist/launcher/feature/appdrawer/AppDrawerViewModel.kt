@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.minimalist.launcher.core.data.AppRepository
+import com.minimalist.launcher.core.data.CalendarRepository
 import com.minimalist.launcher.core.data.ContactsRepository
 import com.minimalist.launcher.core.data.PreferencesRepository
 import com.minimalist.launcher.core.data.SettingsActions
@@ -28,6 +29,7 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 
@@ -35,6 +37,7 @@ class AppDrawerViewModel(
     private val appRepository: AppRepository,
     private val preferencesRepository: PreferencesRepository,
     private val contactsRepository: ContactsRepository,
+    private val calendarRepository: CalendarRepository,
 ) : ViewModel() {
 
     // ── App list (Step 2) ────────────────────────────────────────────────────
@@ -101,7 +104,7 @@ class AppDrawerViewModel(
 
     // ── Selection state (app sheet + pinned-slot sheet) ──────────────────────
 
-    private val selectedApp       = MutableStateFlow<AppInfo?>(null)
+    private val selectedApp        = MutableStateFlow<AppInfo?>(null)
     private val _editingPinnedSlot = MutableStateFlow<Int?>(null)
 
     private val selectionState = combine(selectedApp, _editingPinnedSlot) { app, slot ->
@@ -110,38 +113,53 @@ class AppDrawerViewModel(
 
     // ── Home screen (Step 4) ─────────────────────────────────────────────────
 
-    // Clock: re-emits every second; flatMapLatest restarts the inner loop when
-    // the clock format preference changes so the format takes effect immediately.
     @Suppress("OPT_IN_USAGE")
     private val clockState = preferencesRepository.clockFormat.flatMapLatest { format ->
         flow {
             while (true) {
-                val now      = LocalDateTime.now()
-                val use24h   = format == ClockFormat.HOUR_24
-                val timeFmt  = DateTimeFormatter.ofPattern(if (use24h) "HH:mm" else "h:mm a")
-                val dateFmt  = DateTimeFormatter.ofPattern("EEEE, d MMMM")
+                val now    = LocalDateTime.now()
+                val use24h = format == ClockFormat.HOUR_24
+                val timeFmt = DateTimeFormatter.ofPattern(if (use24h) "HH:mm" else "h:mm a")
+                val dateFmt = DateTimeFormatter.ofPattern("EEEE, d MMMM")
                 emit(Triple(now.format(timeFmt), now.format(dateFmt), use24h))
                 delay(1_000)
             }
         }.flowOn(Dispatchers.Default)
     }
 
-    // Pinned items cached as a StateFlow so pinApp() can read the current value
-    // without suspending.
     private val pinnedItemsFlow = preferencesRepository.pinnedItems()
         .stateIn(viewModelScope, SharingStarted.Lazily, List(5) { null })
 
-    // Clock + pins combined into a single home-state emission. Kept separate
-    // from the app-drawer state so the 1-second clock tick does NOT re-trigger
-    // app list filtering/sorting.
     private val homeState = combine(clockState, pinnedItemsFlow) { clock, pins ->
-        clock to pins   // Pair<Triple<String,String,Boolean>, List<PinnedItem?>>
+        clock to pins
     }
+
+    // ── Widgets (Step 6) ─────────────────────────────────────────────────────
+
+    // Weather: reads the cached line from DataStore — WeatherWorker writes it every 30 min.
+    private val weatherLine = combine(
+        preferencesRepository.weatherEnabled,
+        preferencesRepository.weatherCache,
+    ) { enabled, cache ->
+        if (enabled && !cache.isNullOrBlank()) cache else null
+    }
+
+    // Calendar: re-queries every 60 s on IO; restarts when the enabled flag changes.
+    @Suppress("OPT_IN_USAGE")
+    private val calendarLine = preferencesRepository.calendarEnabled.flatMapLatest { enabled ->
+        if (!enabled) flowOf<String?>(null)
+        else flow<String?> {
+            while (true) {
+                emit(withContext(Dispatchers.IO) { calendarRepository.nextEvent() })
+                delay(60_000)
+            }
+        }
+    }
+
+    private val widgetState = combine(weatherLine, calendarLine) { w, c -> w to c }
 
     // ── Combined UI state ────────────────────────────────────────────────────
 
-    // Inner combine (5 flows) handles app list + search. selectedApp and
-    // editingPinnedSlot share the selectionState slot to keep the count at 5.
     private val rawUiState = combine(
         appState, prefState, selectionState, _searchQuery, searchState,
     ) { (apps, loading, error), (hidden, sort, counts), (selected, editSlot), rawQuery, (debouncedQ, contacts) ->
@@ -184,16 +202,15 @@ class AppDrawerViewModel(
         }
     }.flowOn(Dispatchers.Default)
 
-    // Outer combine layers home state on top. The clock tick produces a new
-    // homeState emission every second; combine uses the cached rawUiState value
-    // so app filtering is NOT re-run on every tick.
-    val uiState = combine(rawUiState, homeState) { base, (clock, pins) ->
+    val uiState = combine(rawUiState, homeState, widgetState) { base, (clock, pins), (weather, calendar) ->
         val (time, date, use24h) = clock
         base.copy(
             currentTime  = time,
             currentDate  = date,
             use24h       = use24h,
             pinnedItems  = pins,
+            weatherLine  = weather,
+            calendarLine = calendar,
         )
     }.stateIn(
         scope        = viewModelScope,
@@ -257,13 +274,9 @@ class AppDrawerViewModel(
         }
     }
 
-    fun onPinnedItemLongPress(slot: Int) {
-        _editingPinnedSlot.value = slot
-    }
+    fun onPinnedItemLongPress(slot: Int) { _editingPinnedSlot.value = slot }
 
-    fun dismissPinnedEditor() {
-        _editingPinnedSlot.value = null
-    }
+    fun dismissPinnedEditor() { _editingPinnedSlot.value = null }
 
     fun removePinnedItem(slot: Int) {
         viewModelScope.launch {
@@ -272,7 +285,6 @@ class AppDrawerViewModel(
         }
     }
 
-    // Pins the app into the first empty slot. Called from the app options sheet.
     fun pinApp(app: AppInfo) {
         viewModelScope.launch {
             val emptySlot = pinnedItemsFlow.value.indexOfFirst { it == null }
@@ -282,7 +294,7 @@ class AppDrawerViewModel(
                     PinnedItem.App(app.packageName, app.label),
                 )
             }
-            selectedApp.value = null   // dismiss the app options sheet
+            selectedApp.value = null
         }
     }
 
@@ -300,7 +312,6 @@ class AppDrawerViewModel(
     private val _navigateToHome = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val navigateToHome: SharedFlow<Unit> = _navigateToHome.asSharedFlow()
 
-    // Called from onNewIntent (Home button pressed) — clear search AND go home.
     fun goHome() {
         clearSearch()
         _navigateToHome.tryEmit(Unit)
@@ -314,9 +325,10 @@ class AppDrawerViewModel(
         private val appRepository: AppRepository,
         private val preferencesRepository: PreferencesRepository,
         private val contactsRepository: ContactsRepository,
+        private val calendarRepository: CalendarRepository,
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T =
-            AppDrawerViewModel(appRepository, preferencesRepository, contactsRepository) as T
+            AppDrawerViewModel(appRepository, preferencesRepository, contactsRepository, calendarRepository) as T
     }
 }

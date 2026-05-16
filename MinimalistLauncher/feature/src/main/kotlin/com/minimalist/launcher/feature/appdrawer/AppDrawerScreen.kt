@@ -301,6 +301,9 @@ private fun HomeScreenPage(
                 onToggleFormat = onToggleClock,
             )
 
+            WidgetLine(text = uiState.weatherLine)
+            WidgetLine(text = uiState.calendarLine)
+
             if (uiState.pinnedItems.any { it != null }) {
                 PinnedSection(
                     items          = uiState.pinnedItems,
@@ -444,6 +447,26 @@ private fun ClockSection(
             modifier  = Modifier.fillMaxWidth(),
         )
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Step 6 — Widget lines (weather + calendar)
+// ─────────────────────────────────────────────────────────────────────────────
+
+@Composable
+private fun WidgetLine(text: String?) {
+    if (text == null) return
+    val textAlign = LocalAppearance.current.textAlignment.toTextAlign()
+    Text(
+        text      = text,
+        style     = MaterialTheme.typography.bodyMedium,
+        color     = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f),
+        textAlign = textAlign,
+        modifier  = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 32.dp)
+            .padding(bottom = 6.dp),
+    )
 }
 
 @OptIn(ExperimentalFoundationApi::class)

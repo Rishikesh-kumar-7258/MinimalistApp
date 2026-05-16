@@ -19,5 +19,8 @@ data class AppDrawerUiState(
     val currentDate: String = "",
     val use24h: Boolean = false,
     val pinnedItems: List<PinnedItem?> = emptyList(),
-    val editingPinnedSlot: Int? = null,   // slot being long-pressed → shows remove sheet
+    val editingPinnedSlot: Int? = null,
+    // ── Widgets (Step 6) ─────────────────────────────────────────────────────
+    val weatherLine: String? = null,    // null = hidden (disabled or no data)
+    val calendarLine: String? = null,   // null = hidden (disabled or no permission)
 )

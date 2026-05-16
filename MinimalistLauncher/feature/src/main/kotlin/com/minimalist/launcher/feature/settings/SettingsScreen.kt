@@ -290,6 +290,55 @@ fun SettingsScreen(viewModel: SettingsViewModel, onBack: () -> Unit) {
         HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.08f))
         Spacer(Modifier.height(24.dp))
 
+        // ── WIDGETS ───────────────────────────────────────────────────────────
+        SectionHeader("widgets")
+
+        WidgetToggleRow(
+            label   = "weather",
+            enabled = uiState.weatherEnabled,
+            onToggle = viewModel::setWeatherEnabled,
+        )
+
+        if (uiState.weatherEnabled) {
+            Spacer(Modifier.height(8.dp))
+            WidgetTextInputRow(
+                label       = "api key",
+                value       = uiState.weatherApiKey,
+                placeholder = "openweathermap key",
+                onValueChange = viewModel::setWeatherApiKey,
+                isPassword  = true,
+            )
+            Spacer(Modifier.height(8.dp))
+            WidgetTextInputRow(
+                label       = "city",
+                value       = uiState.weatherCity,
+                placeholder = "e.g. London",
+                onValueChange = viewModel::setWeatherCity,
+            )
+            Spacer(Modifier.height(8.dp))
+            TextButton(
+                onClick  = { viewModel.fetchWeatherNow() },
+                modifier = Modifier.padding(start = 0.dp),
+            ) {
+                Text(
+                    text  = "fetch now",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+        }
+
+        WidgetToggleRow(
+            label   = "calendar",
+            enabled = uiState.calendarEnabled,
+            onToggle = viewModel::setCalendarEnabled,
+        )
+
+        Spacer(Modifier.height(32.dp))
+        HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.08f))
+        Spacer(Modifier.height(24.dp))
+
         // ── PERMISSIONS ───────────────────────────────────────────────────────
         SectionHeader("permissions")
 
@@ -331,6 +380,18 @@ fun SettingsScreen(viewModel: SettingsViewModel, onBack: () -> Unit) {
             onGrant = {
                 context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
             },
+        )
+
+        val calendarGranted = context.checkSelfPermission(Manifest.permission.READ_CALENDAR) ==
+            PackageManager.PERMISSION_GRANTED
+        val requestCalendar = rememberLauncherForActivityResult(
+            ActivityResultContracts.RequestPermission()
+        ) { /* recomposition picks up the new status */ }
+
+        PermissionRow(
+            label   = "calendar",
+            granted = calendarGranted,
+            onGrant = { requestCalendar.launch(Manifest.permission.READ_CALENDAR) },
         )
 
         Spacer(Modifier.height(64.dp))
@@ -541,5 +602,97 @@ private fun OptionGroup(options: List<String>, selected: String, onSelect: (Stri
                     .padding(4.dp),
             )
         }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Widget helpers (Step 6)
+// ─────────────────────────────────────────────────────────────────────────────
+
+@Composable
+private fun WidgetToggleRow(label: String, enabled: Boolean, onToggle: (Boolean) -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text     = label,
+            style    = MaterialTheme.typography.bodyMedium,
+            color    = MaterialTheme.colorScheme.onBackground,
+            modifier = Modifier.weight(1f),
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            listOf("on" to true, "off" to false).forEach { (label2, value) ->
+                Text(
+                    text  = label2,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (enabled == value)
+                        MaterialTheme.colorScheme.onBackground
+                    else
+                        MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f),
+                    modifier = Modifier.clickable { onToggle(value) }.padding(4.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun WidgetTextInputRow(
+    label: String,
+    value: String,
+    placeholder: String,
+    onValueChange: (String) -> Unit,
+    isPassword: Boolean = false,
+) {
+    var text by remember(value) { mutableStateOf(value) }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text     = label,
+            style    = MaterialTheme.typography.labelSmall,
+            color    = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f),
+            modifier = Modifier.width(56.dp),
+        )
+        Spacer(Modifier.width(12.dp))
+        BasicTextField(
+            value = text,
+            onValueChange = { new ->
+                text = new
+                onValueChange(new)
+            },
+            textStyle = MaterialTheme.typography.labelSmall.copy(
+                color = MaterialTheme.colorScheme.onBackground,
+            ),
+            cursorBrush = SolidColor(MaterialTheme.colorScheme.onBackground),
+            singleLine  = true,
+            keyboardOptions = KeyboardOptions(
+                keyboardType = if (isPassword) KeyboardType.Password else KeyboardType.Text,
+            ),
+            visualTransformation = if (isPassword && text.isNotEmpty())
+                androidx.compose.ui.text.input.PasswordVisualTransformation('•')
+            else
+                androidx.compose.ui.text.input.VisualTransformation.None,
+            decorationBox = { inner ->
+                Box {
+                    if (text.isEmpty()) {
+                        Text(
+                            text  = placeholder,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.2f),
+                        )
+                    }
+                    inner()
+                }
+            },
+            modifier = Modifier.weight(1f),
+        )
     }
 }
