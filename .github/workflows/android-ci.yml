@@ -39,7 +39,7 @@ jobs:
         run: chmod +x ./gradlew
 
       - name: Run checks
-        run: ./gradlew check
+        run: ./gradlew check --stacktrace --info
 
       - name: Assemble debug APK
-        run: ./gradlew assembleDebug
+        run: ./gradlew assembleDebug --stacktrace --info
