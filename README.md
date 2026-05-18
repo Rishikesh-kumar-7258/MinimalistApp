@@ -1,5 +1,10 @@
 # Minimalist Launcher
 
+[![Android CI](https://github.com/Rishikesh-kumar-7258/MinimalistApp/actions/workflows/android-ci.yml/badge.svg)](https://github.com/Rishikesh-kumar-7258/MinimalistApp/actions/workflows/android-ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+![Kotlin](https://img.shields.io/badge/Kotlin-2.0-7F52FF.svg)
+![Min SDK](https://img.shields.io/badge/min%20SDK-26-brightgreen.svg)
+
 A text-only Android home screen replacement. No wallpaper. No icons. No distractions.
 
 Everything you need to navigate your phone — apps, contacts, settings — accessible as plain text, fast, and without visual noise.
@@ -162,6 +167,21 @@ cd MinimalistLauncher
 ```
 
 Requires Android SDK with API 35 build tools. No external accounts or API keys needed for Steps 1–4.
+
+---
+
+## Contributing
+
+Contributions are welcome when they preserve the launcher philosophy: text-only, distraction-free, and local-first.
+
+Start with [CONTRIBUTING.md](CONTRIBUTING.md), use the issue templates for bugs and feature requests, and follow the [Code of Conduct](CODE_OF_CONDUCT.md). Before opening a pull request, run:
+
+```bash
+cd MinimalistLauncher
+./gradlew check
+```
+
+For security issues, please follow [SECURITY.md](SECURITY.md) instead of opening a public issue.
 
 ---
 
