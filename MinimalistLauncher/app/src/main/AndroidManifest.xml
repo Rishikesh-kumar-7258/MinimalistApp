@@ -6,7 +6,9 @@
         All permissions declared upfront so they survive across steps without manifest merges.
         Each permission is only *requested at runtime* when its feature is first used.
     -->
-    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+    <uses-permission
+        android:name="android.permission.QUERY_ALL_PACKAGES"
+        tools:ignore="QueryAllPackagesPermission" />
     <uses-permission
         android:name="android.permission.PACKAGE_USAGE_STATS"
         tools:ignore="ProtectedPermissions" />
