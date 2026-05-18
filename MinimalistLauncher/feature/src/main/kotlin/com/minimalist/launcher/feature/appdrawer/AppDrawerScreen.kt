@@ -69,6 +69,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.text.style.TextAlign
 import com.minimalist.launcher.core.model.AppInfo
+import com.minimalist.launcher.core.model.FocusProfile
 import com.minimalist.launcher.core.model.GestureAction
 import com.minimalist.launcher.core.model.GestureSettings
 import com.minimalist.launcher.core.model.PinnedItem
@@ -105,6 +106,7 @@ fun AppDrawerScreen(viewModel: AppDrawerViewModel, onOpenSettings: () -> Unit = 
     var isSearchBarFocused   by remember { mutableStateOf(false) }
     // Signals the drawer page to auto-focus the search bar after navigation.
     var pendingFocusSearch   by remember { mutableStateOf(false) }
+    var showProfileSwitcher  by remember { mutableStateOf(false) }
 
     // ── Focus helpers ─────────────────────────────────────────────────────────
 
@@ -129,9 +131,10 @@ fun AppDrawerScreen(viewModel: AppDrawerViewModel, onOpenSettings: () -> Unit = 
                 pendingFocusSearch = true
                 scope.launch { pagerState.animateScrollToPage(1) }
             }
-            GestureAction.DIALER      -> viewModel.launchDialer()
-            GestureAction.SCRATCH_PAD -> { /* Step 10 placeholder */ }
-            GestureAction.RECENT_APPS -> { /* Step 9 placeholder */ }
+            GestureAction.DIALER           -> viewModel.launchDialer()
+            GestureAction.SCRATCH_PAD      -> { /* Step 10 placeholder */ }
+            GestureAction.RECENT_APPS      -> { /* Step 9 placeholder */ }
+            GestureAction.PROFILE_SWITCHER -> showProfileSwitcher = true
         }
     }
 
@@ -219,12 +222,13 @@ fun AppDrawerScreen(viewModel: AppDrawerViewModel, onOpenSettings: () -> Unit = 
         ) { page ->
             when (page) {
                 0 -> HomeScreenPage(
-                    uiState         = uiState,
-                    onToggleClock   = viewModel::toggleClockFormat,
-                    onPinnedClick   = viewModel::onPinnedItemClick,
-                    onPinnedLong    = viewModel::onPinnedItemLongPress,
-                    onGesture       = ::onGesture,
-                    onOpenSettings  = onOpenSettings,
+                    uiState              = uiState,
+                    onToggleClock        = viewModel::toggleClockFormat,
+                    onPinnedClick        = viewModel::onPinnedItemClick,
+                    onPinnedLong         = viewModel::onPinnedItemLongPress,
+                    onGesture            = ::onGesture,
+                    onOpenSettings       = onOpenSettings,
+                    onOpenProfileSwitcher = { showProfileSwitcher = true },
                 )
                 else -> AppDrawerPage(
                     uiState          = uiState,
@@ -267,6 +271,17 @@ fun AppDrawerScreen(viewModel: AppDrawerViewModel, onOpenSettings: () -> Unit = 
             onDismiss = viewModel::dismissPinnedEditor,
         )
     }
+
+    if (showProfileSwitcher) {
+        ProfileSwitcherSheet(
+            current   = uiState.activeProfile,
+            onSelect  = { profile ->
+                viewModel.switchProfile(profile)
+                showProfileSwitcher = false
+            },
+            onDismiss = { showProfileSwitcher = false },
+        )
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -282,6 +297,7 @@ private fun HomeScreenPage(
     onPinnedLong: (Int) -> Unit,
     onGesture: (GestureAction) -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenProfileSwitcher: () -> Unit,
 ) {
     val gestures = uiState.gestureSettings
 
@@ -291,10 +307,11 @@ private fun HomeScreenPage(
             // Observe touches without consuming so HorizontalPager still handles
             // horizontal swipes for page navigation.
             .pointerInput(gestures) {
-                val swipeThresholdPx = 80.dp.toPx()
-                val tapMaxMovePx     = 20f
-                val doubleTapMs      = 400L
-                var lastTapTime      = -1L
+                val swipeThresholdPx  = 80.dp.toPx()
+                val tapMaxMovePx      = 20f
+                val doubleTapMs       = 400L
+                val longPressMs       = 500L
+                var lastTapTime       = -1L
 
                 awaitPointerEventScope {
                     while (true) {
@@ -314,28 +331,37 @@ private fun HomeScreenPage(
                             if (!change.pressed) break
                         }
 
-                        val dx    = endPos.x - startPos.x
-                        val dy    = endPos.y - startPos.y
-                        val absDx = abs(dx)
-                        val absDy = abs(dy)
+                        val dx      = endPos.x - startPos.x
+                        val dy      = endPos.y - startPos.y
+                        val absDx   = abs(dx)
+                        val absDy   = abs(dy)
                         val elapsed = System.currentTimeMillis() - startTime
 
-                        if (absDx < tapMaxMovePx && absDy < tapMaxMovePx && elapsed < 300) {
-                            // Tap — check for double-tap
-                            val now = System.currentTimeMillis()
-                            if (lastTapTime > 0 && now - lastTapTime < doubleTapMs) {
-                                onGesture(gestures.doubleTap)
+                        when {
+                            // Long press on background (held still >500 ms) → profile switcher
+                            absDx < tapMaxMovePx && absDy < tapMaxMovePx && elapsed >= longPressMs -> {
                                 lastTapTime = -1
-                            } else {
-                                lastTapTime = now
+                                onOpenProfileSwitcher()
                             }
-                        } else {
-                            lastTapTime = -1
-                            when {
-                                absDy > absDx * 1.5f && dy < -swipeThresholdPx -> onGesture(gestures.swipeUp)
-                                absDy > absDx * 1.5f && dy >  swipeThresholdPx -> onGesture(gestures.swipeDown)
-                                absDx > absDy * 1.5f && dx < -swipeThresholdPx -> onGesture(gestures.swipeLeft)
-                                absDx > absDy * 1.5f && dx >  swipeThresholdPx -> onGesture(gestures.swipeRight)
+                            // Tap — check for double-tap
+                            absDx < tapMaxMovePx && absDy < tapMaxMovePx && elapsed < 300 -> {
+                                val now = System.currentTimeMillis()
+                                if (lastTapTime > 0 && now - lastTapTime < doubleTapMs) {
+                                    onGesture(gestures.doubleTap)
+                                    lastTapTime = -1
+                                } else {
+                                    lastTapTime = now
+                                }
+                            }
+                            // Directional swipe
+                            else -> {
+                                lastTapTime = -1
+                                when {
+                                    absDy > absDx * 1.5f && dy < -swipeThresholdPx -> onGesture(gestures.swipeUp)
+                                    absDy > absDx * 1.5f && dy >  swipeThresholdPx -> onGesture(gestures.swipeDown)
+                                    absDx > absDy * 1.5f && dx < -swipeThresholdPx -> onGesture(gestures.swipeLeft)
+                                    absDx > absDy * 1.5f && dx >  swipeThresholdPx -> onGesture(gestures.swipeRight)
+                                }
                             }
                         }
                     }
@@ -344,8 +370,8 @@ private fun HomeScreenPage(
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
             ClockSection(
-                time          = uiState.currentTime,
-                date          = uiState.currentDate,
+                time           = uiState.currentTime,
+                date           = uiState.currentDate,
                 onToggleFormat = onToggleClock,
             )
 
@@ -354,20 +380,34 @@ private fun HomeScreenPage(
 
             if (uiState.pinnedItems.any { it != null }) {
                 PinnedSection(
-                    items          = uiState.pinnedItems,
-                    onItemClick    = onPinnedClick,
+                    items           = uiState.pinnedItems,
+                    onItemClick     = onPinnedClick,
                     onItemLongPress = onPinnedLong,
                 )
             }
 
             Spacer(Modifier.weight(1f))
 
-            Box(
+            // ── Bottom bar: profile indicator + settings link ─────────────────
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(end = 32.dp, bottom = 24.dp),
-                contentAlignment = Alignment.BottomEnd,
+                    .padding(horizontal = 32.dp, vertical = 24.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
+                // Active profile name — tap to switch
+                Text(
+                    text  = if (uiState.activeProfile == FocusProfile.NONE) "—"
+                            else uiState.activeProfile.name.lowercase(),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onBackground.copy(
+                        alpha = if (uiState.activeProfile == FocusProfile.NONE) 0.15f else 0.55f,
+                    ),
+                    modifier = Modifier
+                        .clickable { onOpenProfileSwitcher() }
+                        .padding(4.dp),
+                )
+                Spacer(Modifier.weight(1f))
                 Text(
                     text  = "settings",
                     style = MaterialTheme.typography.labelSmall,
@@ -942,5 +982,58 @@ private fun SheetAction(label: String, onClick: () -> Unit) {
             color    = MaterialTheme.colorScheme.onSurface,
             modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
         )
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Profile switcher sheet (Step 8)
+// ─────────────────────────────────────────────────────────────────────────────
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ProfileSwitcherSheet(
+    current: FocusProfile,
+    onSelect: (FocusProfile) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState       = sheetState,
+        containerColor   = MaterialTheme.colorScheme.surface,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 32.dp)
+                .padding(bottom = 40.dp),
+        ) {
+            Text(
+                text  = "focus profile",
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Spacer(Modifier.height(16.dp))
+            HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))
+            Spacer(Modifier.height(8.dp))
+            FocusProfile.entries.forEach { profile ->
+                val label = if (profile == FocusProfile.NONE) "none" else profile.name.lowercase()
+                val isActive = profile == current
+                TextButton(
+                    onClick  = { onSelect(profile) },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        text     = if (isActive) "$label ✓" else label,
+                        style    = MaterialTheme.typography.bodyLarge,
+                        color    = if (isActive)
+                            MaterialTheme.colorScheme.onSurface
+                        else
+                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    )
+                }
+            }
+        }
     }
 }

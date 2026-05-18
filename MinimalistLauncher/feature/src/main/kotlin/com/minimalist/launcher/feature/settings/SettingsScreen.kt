@@ -89,7 +89,7 @@ private fun String.isValidHex(): Boolean =
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
-fun SettingsScreen(viewModel: SettingsViewModel, onBack: () -> Unit) {
+fun SettingsScreen(viewModel: SettingsViewModel, onBack: () -> Unit, onOpenFocus: () -> Unit = {}) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val appearance = uiState.appearance
@@ -285,6 +285,29 @@ fun SettingsScreen(viewModel: SettingsViewModel, onBack: () -> Unit) {
                         if (opt == "12h") ClockFormat.HOUR_12 else ClockFormat.HOUR_24
                     )
                 },
+            )
+        }
+
+        // Focus profiles link
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text     = "focus",
+                style    = MaterialTheme.typography.bodyMedium,
+                color    = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                text     = "configure →",
+                style    = MaterialTheme.typography.labelSmall,
+                color    = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
+                modifier = Modifier
+                    .clickable { onOpenFocus() }
+                    .padding(4.dp),
             )
         }
 
@@ -652,12 +675,13 @@ private fun GestureRow(label: String, current: GestureAction, onSelect: (Gesture
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             GestureAction.entries.forEach { action ->
                 val tag = when (action) {
-                    GestureAction.NONE        -> "—"
-                    GestureAction.APP_DRAWER  -> "drawer"
-                    GestureAction.SEARCH      -> "search"
-                    GestureAction.DIALER      -> "dialer"
-                    GestureAction.SCRATCH_PAD -> "pad"
-                    GestureAction.RECENT_APPS -> "recents"
+                    GestureAction.NONE             -> "—"
+                    GestureAction.APP_DRAWER       -> "drawer"
+                    GestureAction.SEARCH           -> "search"
+                    GestureAction.DIALER           -> "dialer"
+                    GestureAction.SCRATCH_PAD      -> "pad"
+                    GestureAction.RECENT_APPS      -> "recents"
+                    GestureAction.PROFILE_SWITCHER -> "focus"
                 }
                 Text(
                     text  = tag,

@@ -1,6 +1,8 @@
 package com.minimalist.launcher.feature.appdrawer
 
 import com.minimalist.launcher.core.model.AppInfo
+import com.minimalist.launcher.core.model.FocusProfile
+import com.minimalist.launcher.core.model.FrictionReason
 import com.minimalist.launcher.core.model.GestureSettings
 import com.minimalist.launcher.core.model.PinnedItem
 import com.minimalist.launcher.core.model.SearchResult
@@ -26,4 +28,10 @@ data class AppDrawerUiState(
     val calendarLine: String? = null,   // null = hidden (disabled or no permission)
     // ── Gestures (Step 7) ────────────────────────────────────────────────────
     val gestureSettings: GestureSettings = GestureSettings(),
+    // ── Focus profiles (Step 8) ──────────────────────────────────────────────
+    val activeProfile: FocusProfile = FocusProfile.NONE,
+    // ── Friction / restrictions (Step 9) ─────────────────────────────────────
+    val frictionApp: AppInfo? = null,
+    val frictionReason: FrictionReason? = null,
+    val frictionMessage: String = "Take a breath. Do you really need this right now?",
 )

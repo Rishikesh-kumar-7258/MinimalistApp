@@ -7,13 +7,18 @@ import androidx.lifecycle.viewModelScope
 import com.minimalist.launcher.core.data.AppRepository
 import com.minimalist.launcher.core.data.CalendarRepository
 import com.minimalist.launcher.core.data.ContactsRepository
+import com.minimalist.launcher.core.data.EmergencyBypass
 import com.minimalist.launcher.core.data.PreferencesRepository
 import com.minimalist.launcher.core.data.SettingsActions
+import com.minimalist.launcher.core.data.UsageRepository
 import com.minimalist.launcher.core.model.AppInfo
 import com.minimalist.launcher.core.model.ClockFormat
+import com.minimalist.launcher.core.model.FocusProfile
+import com.minimalist.launcher.core.model.FrictionReason
 import com.minimalist.launcher.core.model.PinnedItem
 import com.minimalist.launcher.core.model.SearchResult
 import com.minimalist.launcher.core.model.SortOrder
+import java.time.LocalTime
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -69,11 +74,26 @@ class AppDrawerViewModel(
         Triple(apps, loading, error)
     }
 
+    // Includes profile block-list so all filtering (hidden + blocked) is co-located.
+    private data class PrefState(
+        val hidden: Set<String>,
+        val sort: SortOrder,
+        val counts: Map<String, Int>,
+        val activeProfile: FocusProfile,
+        val blockList: Set<String>,
+    )
+
     private val prefState = combine(
         preferencesRepository.hiddenApps,
         preferencesRepository.sortOrder,
         preferencesRepository.launchCounts,
-    ) { hidden, sort, counts -> Triple(hidden, sort, counts) }
+        preferencesRepository.activeProfile,
+        preferencesRepository.allProfileConfigs,
+    ) { hidden, sort, counts, active, configs ->
+        val blockList = if (active == FocusProfile.NONE) emptySet()
+                        else configs[active]?.blockList ?: emptySet()
+        PrefState(hidden, sort, counts, active, blockList)
+    }
 
     // ── Search (Step 3) ──────────────────────────────────────────────────────
 
@@ -167,24 +187,30 @@ class AppDrawerViewModel(
 
     private val rawUiState = combine(
         appState, prefState, selectionState, _searchQuery, searchState,
-    ) { (apps, loading, error), (hidden, sort, counts), (selected, editSlot), rawQuery, (debouncedQ, contacts) ->
+    ) { (apps, loading, error), prefs, (selected, editSlot), rawQuery, (debouncedQ, contacts) ->
 
-        val visible = apps.filter { it.packageName !in hidden }
-        val sorted  = when (sort) {
+        // Apply both permanent hidden-apps and the active profile's block-list.
+        // Emergency apps bypass the block-list so they are always visible.
+        val visible = apps.filter { app ->
+            app.packageName !in prefs.hidden &&
+            (EmergencyBypass.isEmergency(app.packageName) || app.packageName !in prefs.blockList)
+        }
+        val sorted = when (prefs.sort) {
             SortOrder.ALPHABETICAL -> visible.sortedBy { it.label.lowercase() }
-            SortOrder.FREQUENCY    -> visible.sortedByDescending { counts[it.packageName] ?: 0 }
+            SortOrder.FREQUENCY    -> visible.sortedByDescending { prefs.counts[it.packageName] ?: 0 }
         }
 
         if (debouncedQ.isBlank()) {
             AppDrawerUiState(
                 apps              = sorted,
-                sortOrder         = sort,
+                sortOrder         = prefs.sort,
                 isLoading         = loading,
                 selectedApp       = selected,
                 editingPinnedSlot = editSlot,
                 error             = error,
                 searchQuery       = rawQuery,
                 searchResults     = emptyList(),
+                activeProfile     = prefs.activeProfile,
             )
         } else {
             val appResults: List<SearchResult> = visible
@@ -196,13 +222,14 @@ class AppDrawerViewModel(
 
             AppDrawerUiState(
                 apps              = emptyList(),
-                sortOrder         = sort,
+                sortOrder         = prefs.sort,
                 isLoading         = loading,
                 selectedApp       = selected,
                 editingPinnedSlot = editSlot,
                 error             = error,
                 searchQuery       = rawQuery,
                 searchResults     = appResults + contacts + settingResults,
+                activeProfile     = prefs.activeProfile,
             )
         }
     }.flowOn(Dispatchers.Default)
@@ -217,6 +244,7 @@ class AppDrawerViewModel(
             weatherLine     = weather,
             calendarLine    = calendar,
             gestureSettings = gestures,
+            // activeProfile is already set in rawUiState — no copy needed here
         )
     }.stateIn(
         scope        = viewModelScope,
@@ -326,6 +354,12 @@ class AppDrawerViewModel(
     fun launchGoogleSearch() = appRepository.launchGoogleSearch()
 
     fun launchDialer() = appRepository.launchDialer()
+
+    // ── Focus profiles (Step 8) ──────────────────────────────────────────────
+
+    fun switchProfile(profile: FocusProfile) = viewModelScope.launch {
+        preferencesRepository.setActiveProfile(profile)
+    }
 
     // ── Factory ─────────────────────────────────────────────────────────────
 

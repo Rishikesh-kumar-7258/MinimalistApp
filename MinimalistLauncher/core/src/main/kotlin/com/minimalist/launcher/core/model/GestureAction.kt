@@ -7,4 +7,5 @@ enum class GestureAction {
     DIALER,
     SCRATCH_PAD,
     RECENT_APPS,
+    PROFILE_SWITCHER,
 }
