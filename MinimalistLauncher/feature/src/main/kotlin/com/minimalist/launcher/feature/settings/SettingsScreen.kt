@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -89,7 +90,13 @@ private fun String.isValidHex(): Boolean =
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
-fun SettingsScreen(viewModel: SettingsViewModel, onBack: () -> Unit, onOpenFocus: () -> Unit = {}) {
+fun SettingsScreen(
+    viewModel: SettingsViewModel,
+    onBack: () -> Unit,
+    onOpenFocus: () -> Unit = {},
+    onOpenUsage: () -> Unit = {},
+    onOpenRestrictions: () -> Unit = {},
+) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val appearance = uiState.appearance
@@ -289,27 +296,10 @@ fun SettingsScreen(viewModel: SettingsViewModel, onBack: () -> Unit, onOpenFocus
         }
 
         // Focus profiles link
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text     = "focus",
-                style    = MaterialTheme.typography.bodyMedium,
-                color    = MaterialTheme.colorScheme.onBackground,
-                modifier = Modifier.weight(1f),
-            )
-            Text(
-                text     = "configure →",
-                style    = MaterialTheme.typography.labelSmall,
-                color    = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
-                modifier = Modifier
-                    .clickable { onOpenFocus() }
-                    .padding(4.dp),
-            )
-        }
+        NavRow(label = "focus",        onClick = onOpenFocus)
+        // Usage & restrictions links
+        NavRow(label = "usage",        onClick = onOpenUsage)
+        NavRow(label = "restrictions", onClick = onOpenRestrictions)
 
         Spacer(Modifier.height(32.dp))
         HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.08f))
@@ -448,6 +438,54 @@ fun SettingsScreen(viewModel: SettingsViewModel, onBack: () -> Unit, onOpenFocus
             onGrant = { requestCalendar.launch(Manifest.permission.READ_CALENDAR) },
         )
 
+        Spacer(Modifier.height(32.dp))
+        HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.08f))
+        Spacer(Modifier.height(24.dp))
+
+        // ── DATA ──────────────────────────────────────────────────────────────
+        SectionHeader("data")
+
+        val backupLauncher = rememberLauncherForActivityResult(
+            ActivityResultContracts.CreateDocument("application/json")
+        ) { uri -> uri?.let { viewModel.writeBackup(context, it) } }
+
+        val restoreLauncher = rememberLauncherForActivityResult(
+            ActivityResultContracts.OpenDocument()
+        ) { uri -> uri?.let { viewModel.readAndApplyRestore(context, it) } }
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(24.dp),
+        ) {
+            Text(
+                text  = "backup →",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+                modifier = Modifier
+                    .clickable { backupLauncher.launch("minimalist_backup.json") }
+                    .padding(4.dp),
+            )
+            Text(
+                text  = "restore →",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+                modifier = Modifier
+                    .clickable { restoreLauncher.launch(arrayOf("application/json")) }
+                    .padding(4.dp),
+            )
+        }
+
+        if (uiState.backupMessage.isNotEmpty()) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text  = uiState.backupMessage,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.45f),
+            )
+        }
+
         Spacer(Modifier.height(64.dp))
     }
 }
@@ -568,6 +606,35 @@ private fun CustomHexRow(label: String, currentHex: String?, onHexChange: (Strin
                     inner()
                 }
             },
+        )
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Navigation row (taps to open a sub-screen)
+// ─────────────────────────────────────────────────────────────────────────────
+
+@Composable
+private fun NavRow(label: String, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text     = label,
+            style    = MaterialTheme.typography.bodyMedium,
+            color    = MaterialTheme.colorScheme.onBackground,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            text     = "configure →",
+            style    = MaterialTheme.typography.labelSmall,
+            color    = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
+            modifier = Modifier
+                .clickable { onClick() }
+                .padding(4.dp),
         )
     }
 }

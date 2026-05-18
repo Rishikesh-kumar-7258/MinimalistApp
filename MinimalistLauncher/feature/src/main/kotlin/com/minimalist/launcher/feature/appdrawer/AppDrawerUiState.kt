@@ -24,8 +24,8 @@ data class AppDrawerUiState(
     val pinnedItems: List<PinnedItem?> = emptyList(),
     val editingPinnedSlot: Int? = null,
     // ── Widgets (Step 6) ─────────────────────────────────────────────────────
-    val weatherLine: String? = null,    // null = hidden (disabled or no data)
-    val calendarLine: String? = null,   // null = hidden (disabled or no permission)
+    val weatherLine: String? = null,
+    val calendarLine: String? = null,
     // ── Gestures (Step 7) ────────────────────────────────────────────────────
     val gestureSettings: GestureSettings = GestureSettings(),
     // ── Focus profiles (Step 8) ──────────────────────────────────────────────
@@ -34,4 +34,8 @@ data class AppDrawerUiState(
     val frictionApp: AppInfo? = null,
     val frictionReason: FrictionReason? = null,
     val frictionMessage: String = "Take a breath. Do you really need this right now?",
+    // ── Scratch pad + app lock (Step 10) ─────────────────────────────────────
+    val showScratchPad: Boolean = false,
+    val scratchPadContent: String = "",
+    val pendingLockedApp: AppInfo? = null,
 )

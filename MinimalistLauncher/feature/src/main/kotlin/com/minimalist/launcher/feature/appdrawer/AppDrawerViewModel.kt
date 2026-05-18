@@ -19,6 +19,7 @@ import com.minimalist.launcher.core.model.PinnedItem
 import com.minimalist.launcher.core.model.SearchResult
 import com.minimalist.launcher.core.model.SortOrder
 import java.time.LocalTime
+import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -28,6 +29,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
@@ -36,13 +38,13 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.time.LocalDateTime
-import java.time.format.DateTimeFormatter
 
 class AppDrawerViewModel(
     private val appRepository: AppRepository,
     private val preferencesRepository: PreferencesRepository,
     private val contactsRepository: ContactsRepository,
     private val calendarRepository: CalendarRepository,
+    private val usageRepository: UsageRepository,
 ) : ViewModel() {
 
     // ── App list (Step 2) ────────────────────────────────────────────────────
@@ -156,7 +158,6 @@ class AppDrawerViewModel(
 
     // ── Widgets (Step 6) ─────────────────────────────────────────────────────
 
-    // Weather: reads the cached line from DataStore — WeatherWorker writes it every 30 min.
     private val weatherLine = combine(
         preferencesRepository.weatherEnabled,
         preferencesRepository.weatherCache,
@@ -164,7 +165,6 @@ class AppDrawerViewModel(
         if (enabled && !cache.isNullOrBlank()) cache else null
     }
 
-    // Calendar: re-queries every 60 s on IO; restarts when the enabled flag changes.
     @Suppress("OPT_IN_USAGE")
     private val calendarLine = preferencesRepository.calendarEnabled.flatMapLatest { enabled ->
         if (!enabled) flowOf<String?>(null)
@@ -183,14 +183,45 @@ class AppDrawerViewModel(
     private val gestureSettings = preferencesRepository.gestureSettings
         .stateIn(viewModelScope, SharingStarted.Lazily, com.minimalist.launcher.core.model.GestureSettings())
 
+    // ── Friction state (Step 9) ──────────────────────────────────────────────
+
+    private val _frictionApp    = MutableStateFlow<AppInfo?>(null)
+    private val _frictionReason = MutableStateFlow<FrictionReason?>(null)
+    private val _frictionMsg    = MutableStateFlow("Take a breath. Do you really need this right now?")
+
+    private data class FrictionState(
+        val app: AppInfo?,
+        val reason: FrictionReason?,
+        val msg: String,
+    )
+
+    private val frictionState = combine(_frictionApp, _frictionReason, _frictionMsg) { app, reason, msg ->
+        FrictionState(app, reason, msg)
+    }
+
+    // ── Scratch pad + app lock state (Step 10) ───────────────────────────────
+
+    private val _showScratchPad   = MutableStateFlow(false)
+    private val _pendingLockedApp = MutableStateFlow<AppInfo?>(null)
+
+    private data class UtilityState(
+        val showScratchPad: Boolean,
+        val scratchPadContent: String,
+        val pendingLockedApp: AppInfo?,
+    )
+
+    private val utilityState = combine(
+        _showScratchPad,
+        preferencesRepository.scratchPadContent,
+        _pendingLockedApp,
+    ) { show, content, locked -> UtilityState(show, content, locked) }
+
     // ── Combined UI state ────────────────────────────────────────────────────
 
     private val rawUiState = combine(
         appState, prefState, selectionState, _searchQuery, searchState,
     ) { (apps, loading, error), prefs, (selected, editSlot), rawQuery, (debouncedQ, contacts) ->
 
-        // Apply both permanent hidden-apps and the active profile's block-list.
-        // Emergency apps bypass the block-list so they are always visible.
         val visible = apps.filter { app ->
             app.packageName !in prefs.hidden &&
             (EmergencyBypass.isEmergency(app.packageName) || app.packageName !in prefs.blockList)
@@ -244,13 +275,122 @@ class AppDrawerViewModel(
             weatherLine     = weather,
             calendarLine    = calendar,
             gestureSettings = gestures,
-            // activeProfile is already set in rawUiState — no copy needed here
         )
-    }.stateIn(
+    }
+    .combine(frictionState) { base, fr ->
+        base.copy(
+            frictionApp     = fr.app,
+            frictionReason  = fr.reason,
+            frictionMessage = fr.msg,
+        )
+    }
+    .combine(utilityState) { base, util ->
+        base.copy(
+            showScratchPad   = util.showScratchPad,
+            scratchPadContent = util.scratchPadContent,
+            pendingLockedApp  = util.pendingLockedApp,
+        )
+    }
+    .stateIn(
         scope        = viewModelScope,
         started      = SharingStarted.Lazily,
         initialValue = AppDrawerUiState(),
     )
+
+    // ── Friction enforcement (Step 9) ─────────────────────────────────────────
+
+    private fun checkAndLaunch(app: AppInfo, onClearSearch: Boolean = true, proceed: () -> Unit) {
+        viewModelScope.launch(Dispatchers.IO) {
+            // App lock check (Step 10)
+            val locked = preferencesRepository.lockedApps.first()
+            if (app.packageName in locked) {
+                withContext(Dispatchers.Main) { _pendingLockedApp.value = app }
+                return@launch
+            }
+
+            val limits  = preferencesRepository.appDailyLimits.first()
+            val windows = preferencesRepository.appTimeWindows.first()
+            val msg     = preferencesRepository.frictionMessage.first()
+
+            // Daily limit check
+            val limitMin = limits[app.packageName] ?: 0
+            if (limitMin > 0) {
+                val usageMs = usageRepository.queryTodayRawMs()[app.packageName] ?: 0L
+                if (usageMs / 60_000 >= limitMin) {
+                    withContext(Dispatchers.Main) {
+                        _frictionMsg.value    = msg
+                        _frictionApp.value    = app
+                        _frictionReason.value = FrictionReason.DAILY_LIMIT
+                    }
+                    return@launch
+                }
+            }
+
+            // Time window check
+            val window = windows[app.packageName]
+            if (window != null) {
+                val now   = LocalTime.now()
+                val fmt   = DateTimeFormatter.ofPattern("HH:mm")
+                val start = runCatching { LocalTime.parse(window.first,  fmt) }.getOrDefault(LocalTime.MIDNIGHT)
+                val end   = runCatching { LocalTime.parse(window.second, fmt) }.getOrDefault(LocalTime.MAX)
+                val inWindow = if (start <= end) now >= start && now <= end
+                               else now >= start || now <= end
+                if (!inWindow) {
+                    withContext(Dispatchers.Main) {
+                        _frictionMsg.value    = msg
+                        _frictionApp.value    = app
+                        _frictionReason.value = FrictionReason.TIME_WINDOW
+                    }
+                    return@launch
+                }
+            }
+
+            withContext(Dispatchers.Main) {
+                if (onClearSearch) clearSearch()
+                proceed()
+            }
+        }
+    }
+
+    fun clearFriction() {
+        _frictionApp.value    = null
+        _frictionReason.value = null
+    }
+
+    fun proceedAfterFriction() {
+        val app = _frictionApp.value ?: return
+        clearFriction()
+        clearSearch()
+        viewModelScope.launch {
+            try { preferencesRepository.recordLaunch(app.packageName) }
+            catch (e: Exception) { Log.e("AppDrawerVM", "recordLaunch failed", e) }
+            appRepository.launch(app.packageName)
+        }
+    }
+
+    // ── App lock actions (Step 10) ────────────────────────────────────────────
+
+    fun cancelLock() { _pendingLockedApp.value = null }
+
+    fun launchAfterBiometric() {
+        val app = _pendingLockedApp.value ?: return
+        _pendingLockedApp.value = null
+        clearSearch()
+        viewModelScope.launch {
+            try { preferencesRepository.recordLaunch(app.packageName) }
+            catch (e: Exception) { Log.e("AppDrawerVM", "recordLaunch failed", e) }
+            appRepository.launch(app.packageName)
+        }
+    }
+
+    // ── Scratch pad (Step 10) ─────────────────────────────────────────────────
+
+    fun openScratchPad()  { _showScratchPad.value = true }
+    fun closeScratchPad() { _showScratchPad.value = false }
+
+    fun setScratchPadContent(content: String) {
+        viewModelScope.launch { preferencesRepository.setScratchPadContent(content) }
+    }
 
     // ── Search actions ───────────────────────────────────────────────────────
 
@@ -259,16 +399,23 @@ class AppDrawerViewModel(
     fun clearSearch() { _searchQuery.value = "" }
 
     fun onSearchResultClick(result: SearchResult) {
-        viewModelScope.launch {
-            clearSearch()
-            when (result) {
-                is SearchResult.App -> {
-                    try { preferencesRepository.recordLaunch(result.info.packageName) }
-                    catch (e: Exception) { Log.e("AppDrawerVM", "recordLaunch failed", e) }
-                    appRepository.launch(result.info.packageName)
+        when (result) {
+            is SearchResult.App -> {
+                checkAndLaunch(result.info) {
+                    viewModelScope.launch {
+                        try { preferencesRepository.recordLaunch(result.info.packageName) }
+                        catch (e: Exception) { Log.e("AppDrawerVM", "recordLaunch failed", e) }
+                        appRepository.launch(result.info.packageName)
+                    }
                 }
-                is SearchResult.Contact -> appRepository.launchContact(result.number)
-                is SearchResult.Setting -> appRepository.launchSetting(result.action)
+            }
+            is SearchResult.Contact -> {
+                clearSearch()
+                appRepository.launchContact(result.number)
+            }
+            is SearchResult.Setting -> {
+                clearSearch()
+                appRepository.launchSetting(result.action)
             }
         }
     }
@@ -276,11 +423,12 @@ class AppDrawerViewModel(
     // ── App drawer actions ───────────────────────────────────────────────────
 
     fun onAppClick(app: AppInfo) {
-        viewModelScope.launch {
-            clearSearch()
-            try { preferencesRepository.recordLaunch(app.packageName) }
-            catch (e: Exception) { Log.e("AppDrawerVM", "recordLaunch failed", e) }
-            appRepository.launch(app.packageName)
+        checkAndLaunch(app) {
+            viewModelScope.launch {
+                try { preferencesRepository.recordLaunch(app.packageName) }
+                catch (e: Exception) { Log.e("AppDrawerVM", "recordLaunch failed", e) }
+                appRepository.launch(app.packageName)
+            }
         }
     }
 
@@ -368,9 +516,13 @@ class AppDrawerViewModel(
         private val preferencesRepository: PreferencesRepository,
         private val contactsRepository: ContactsRepository,
         private val calendarRepository: CalendarRepository,
+        private val usageRepository: UsageRepository,
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T =
-            AppDrawerViewModel(appRepository, preferencesRepository, contactsRepository, calendarRepository) as T
+            AppDrawerViewModel(
+                appRepository, preferencesRepository, contactsRepository,
+                calendarRepository, usageRepository,
+            ) as T
     }
 }

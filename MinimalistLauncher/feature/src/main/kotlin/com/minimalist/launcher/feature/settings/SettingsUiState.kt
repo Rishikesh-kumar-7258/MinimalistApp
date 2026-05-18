@@ -17,4 +17,6 @@ data class SettingsUiState(
     val weatherCity: String = "",
     // Step 7
     val gestureSettings: GestureSettings = GestureSettings(),
+    // Step 10
+    val backupMessage: String = "",
 )

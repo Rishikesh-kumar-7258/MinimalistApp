@@ -21,6 +21,7 @@ import com.minimalist.launcher.core.model.SortOrder
 import com.minimalist.launcher.core.model.TextAlignment
 import com.minimalist.launcher.core.model.ThemeMode
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
 class PreferencesRepository(private val dataStore: DataStore<Preferences>) {
@@ -67,6 +68,9 @@ class PreferencesRepository(private val dataStore: DataStore<Preferences>) {
         private val SCREEN_TIME_GOAL_MINUTES = intPreferencesKey("screen_time_goal_minutes")
         private val STREAK_COUNT             = intPreferencesKey("streak_count")
         private val STREAK_LAST_DATE         = stringPreferencesKey("streak_last_date")
+        // Step 10 keys
+        private val SCRATCH_PAD_CONTENT = stringPreferencesKey("scratch_pad_content")
+        private val LOCKED_APPS         = stringSetPreferencesKey("locked_apps")
     }
 
     val hiddenApps: Flow<Set<String>> =
@@ -367,6 +371,114 @@ class PreferencesRepository(private val dataStore: DataStore<Preferences>) {
         dataStore.edit { prefs ->
             prefs[STREAK_COUNT]     = count
             prefs[STREAK_LAST_DATE] = date
+        }
+    }
+
+    // ── Step 10: scratch pad ──────────────────────────────────────────────────
+
+    val scratchPadContent: Flow<String> = dataStore.data.map { it[SCRATCH_PAD_CONTENT] ?: "" }
+
+    suspend fun setScratchPadContent(content: String) {
+        dataStore.edit { it[SCRATCH_PAD_CONTENT] = content }
+    }
+
+    // ── Step 10: locked apps ──────────────────────────────────────────────────
+
+    val lockedApps: Flow<Set<String>> = dataStore.data.map { it[LOCKED_APPS] ?: emptySet() }
+
+    suspend fun toggleLockedApp(packageName: String) {
+        dataStore.edit { prefs ->
+            val set = (prefs[LOCKED_APPS] ?: emptySet()).toMutableSet()
+            if (packageName in set) set.remove(packageName) else set.add(packageName)
+            prefs[LOCKED_APPS] = set
+        }
+    }
+
+    // ── Step 10: backup / restore ─────────────────────────────────────────────
+
+    suspend fun exportToJson(): String {
+        val p = dataStore.data.first()
+        val root = org.json.JSONObject()
+        root.put("version", 1)
+        val prefs = org.json.JSONObject()
+
+        p[HIDDEN_APPS]?.let   { prefs.put("hidden_apps",   org.json.JSONArray(it.toList())) }
+        p[SORT_ORDER]?.let    { prefs.put("sort_order",    it) }
+        p[LAUNCH_COUNTS]?.let { prefs.put("launch_counts", org.json.JSONArray(it.toList())) }
+        p[CLOCK_FORMAT]?.let  { prefs.put("clock_format",  it) }
+        (0 until 5).forEach   { i -> p[pinnedKey(i)]?.let { v -> prefs.put("pinned_$i", v) } }
+        p[THEME_MODE]?.let    { prefs.put("theme_mode",    it) }
+        p[FONT_SIZE]?.let     { prefs.put("font_size",     it) }
+        p[FONT_FAMILY]?.let   { prefs.put("font_family",   it) }
+        p[TEXT_ALIGNMENT]?.let{ prefs.put("text_alignment",it) }
+        p[BG_COLOR]?.let      { prefs.put("bg_color",      it) }
+        p[TEXT_COLOR]?.let    { prefs.put("text_color",    it) }
+        p[WEATHER_ENABLED]?.let  { prefs.put("weather_enabled",  it) }
+        p[CALENDAR_ENABLED]?.let { prefs.put("calendar_enabled", it) }
+        p[WEATHER_API_KEY]?.let  { prefs.put("weather_api_key",  it) }
+        p[WEATHER_CITY]?.let     { prefs.put("weather_city",     it) }
+        p[PROFILE_ACTIVE]?.let   { prefs.put("profile_active",   it) }
+        FocusProfile.entries.filter { it != FocusProfile.NONE }.forEach { pr ->
+            val name = pr.name.lowercase()
+            p[profileBlockListKey(pr)]?.let       { prefs.put("profile_${name}_blocklist", org.json.JSONArray(it.toList())) }
+            p[profileScheduleEnabledKey(pr)]?.let { prefs.put("profile_${name}_schedule_enabled", it) }
+            p[profileStartTimeKey(pr)]?.let       { prefs.put("profile_${name}_start_time", it) }
+            p[profileEndTimeKey(pr)]?.let         { prefs.put("profile_${name}_end_time",   it) }
+        }
+        p[APP_DAILY_LIMITS]?.let  { prefs.put("app_daily_limits",   org.json.JSONArray(it.toList())) }
+        p[APP_TIME_WINDOWS]?.let  { prefs.put("app_time_windows",   org.json.JSONArray(it.toList())) }
+        p[FRICTION_MESSAGE]?.let  { prefs.put("friction_message",   it) }
+        p[REPORT_ENABLED]?.let    { prefs.put("report_enabled",     it) }
+        p[REPORT_TIME]?.let       { prefs.put("report_time",        it) }
+        p[SCREEN_TIME_GOAL_MINUTES]?.let { prefs.put("screen_time_goal", it) }
+        p[SCRATCH_PAD_CONTENT]?.let { prefs.put("scratch_pad_content", it) }
+        p[LOCKED_APPS]?.let { prefs.put("locked_apps", org.json.JSONArray(it.toList())) }
+
+        root.put("prefs", prefs)
+        return root.toString(2)
+    }
+
+    suspend fun importFromJson(json: String) {
+        runCatching {
+            val root  = org.json.JSONObject(json)
+            val prefs = root.getJSONObject("prefs")
+            dataStore.edit { p ->
+                fun arr(key: String): Set<String>? = prefs.optJSONArray(key)
+                    ?.let { a -> (0 until a.length()).map { a.getString(it) }.toSet() }
+
+                arr("hidden_apps")?.let   { p[HIDDEN_APPS]   = it }
+                prefs.optString("sort_order").takeIf { it.isNotEmpty() }?.let  { p[SORT_ORDER]   = it }
+                arr("launch_counts")?.let { p[LAUNCH_COUNTS] = it }
+                prefs.optString("clock_format").takeIf { it.isNotEmpty() }?.let { p[CLOCK_FORMAT] = it }
+                (0 until 5).forEach { i -> prefs.optString("pinned_$i").takeIf { it.isNotEmpty() }?.let { v -> p[pinnedKey(i)] = v } }
+                prefs.optString("theme_mode").takeIf    { it.isNotEmpty() }?.let { p[THEME_MODE]     = it }
+                prefs.optString("font_size").takeIf     { it.isNotEmpty() }?.let { p[FONT_SIZE]      = it }
+                prefs.optString("font_family").takeIf   { it.isNotEmpty() }?.let { p[FONT_FAMILY]    = it }
+                prefs.optString("text_alignment").takeIf{ it.isNotEmpty() }?.let { p[TEXT_ALIGNMENT] = it }
+                prefs.optString("bg_color").takeIf      { it.isNotEmpty() }?.let { p[BG_COLOR]       = it }
+                prefs.optString("text_color").takeIf    { it.isNotEmpty() }?.let { p[TEXT_COLOR]      = it }
+                if (prefs.has("weather_enabled"))  p[WEATHER_ENABLED]  = prefs.getBoolean("weather_enabled")
+                if (prefs.has("calendar_enabled")) p[CALENDAR_ENABLED] = prefs.getBoolean("calendar_enabled")
+                prefs.optString("weather_api_key").takeIf { it.isNotEmpty() }?.let { p[WEATHER_API_KEY] = it }
+                prefs.optString("weather_city").takeIf    { it.isNotEmpty() }?.let { p[WEATHER_CITY]    = it }
+                prefs.optString("profile_active").takeIf  { it.isNotEmpty() }?.let { p[PROFILE_ACTIVE]  = it }
+                FocusProfile.entries.filter { it != FocusProfile.NONE }.forEach { pr ->
+                    val name = pr.name.lowercase()
+                    arr("profile_${name}_blocklist")?.let       { p[profileBlockListKey(pr)]       = it }
+                    if (prefs.has("profile_${name}_schedule_enabled"))
+                        p[profileScheduleEnabledKey(pr)] = prefs.getBoolean("profile_${name}_schedule_enabled")
+                    prefs.optString("profile_${name}_start_time").takeIf { it.isNotEmpty() }?.let { p[profileStartTimeKey(pr)] = it }
+                    prefs.optString("profile_${name}_end_time").takeIf   { it.isNotEmpty() }?.let { p[profileEndTimeKey(pr)]   = it }
+                }
+                arr("app_daily_limits")?.let  { p[APP_DAILY_LIMITS]  = it }
+                arr("app_time_windows")?.let  { p[APP_TIME_WINDOWS]  = it }
+                prefs.optString("friction_message").takeIf { it.isNotEmpty() }?.let { p[FRICTION_MESSAGE] = it }
+                if (prefs.has("report_enabled")) p[REPORT_ENABLED] = prefs.getBoolean("report_enabled")
+                prefs.optString("report_time").takeIf { it.isNotEmpty() }?.let { p[REPORT_TIME] = it }
+                if (prefs.has("screen_time_goal")) p[SCREEN_TIME_GOAL_MINUTES] = prefs.getInt("screen_time_goal")
+                prefs.optString("scratch_pad_content").takeIf { it.isNotEmpty() }?.let { p[SCRATCH_PAD_CONTENT] = it }
+                arr("locked_apps")?.let { p[LOCKED_APPS] = it }
+            }
         }
     }
 

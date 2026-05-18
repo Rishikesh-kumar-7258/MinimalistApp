@@ -5,6 +5,10 @@ import android.content.pm.PackageManager
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.biometric.BiometricManager
+import androidx.biometric.BiometricPrompt
+import androidx.core.content.ContextCompat
+import androidx.fragment.app.FragmentActivity
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -77,6 +81,8 @@ import com.minimalist.launcher.core.model.SearchResult
 import com.minimalist.launcher.core.model.SortOrder
 import com.minimalist.launcher.core.model.TextAlignment
 import com.minimalist.launcher.feature.LocalAppearance
+import com.minimalist.launcher.feature.friction.FrictionScreen
+import com.minimalist.launcher.feature.scratchpad.ScratchPadScreen
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 
@@ -132,8 +138,8 @@ fun AppDrawerScreen(viewModel: AppDrawerViewModel, onOpenSettings: () -> Unit = 
                 scope.launch { pagerState.animateScrollToPage(1) }
             }
             GestureAction.DIALER           -> viewModel.launchDialer()
-            GestureAction.SCRATCH_PAD      -> { /* Step 10 placeholder */ }
-            GestureAction.RECENT_APPS      -> { /* Step 9 placeholder */ }
+            GestureAction.SCRATCH_PAD      -> viewModel.openScratchPad()
+            GestureAction.RECENT_APPS      -> { /* requires system overlay, not available as a launcher */ }
             GestureAction.PROFILE_SWITCHER -> showProfileSwitcher = true
         }
     }
@@ -281,6 +287,59 @@ fun AppDrawerScreen(viewModel: AppDrawerViewModel, onOpenSettings: () -> Unit = 
             },
             onDismiss = { showProfileSwitcher = false },
         )
+    }
+
+    // ── Step 9: Friction screen overlay ──────────────────────────────────────
+
+    if (uiState.frictionApp != null && uiState.frictionReason != null) {
+        FrictionScreen(
+            appLabel  = uiState.frictionApp!!.label,
+            reason    = uiState.frictionReason!!,
+            message   = uiState.frictionMessage,
+            onProceed = viewModel::proceedAfterFriction,
+            onGoBack  = viewModel::clearFriction,
+        )
+    }
+
+    // ── Step 10: Scratch pad overlay ─────────────────────────────────────────
+
+    if (uiState.showScratchPad) {
+        ScratchPadScreen(
+            content         = uiState.scratchPadContent,
+            onContentChange = viewModel::setScratchPadContent,
+            onClose         = viewModel::closeScratchPad,
+        )
+    }
+
+    // ── Step 10: App lock — biometric prompt ─────────────────────────────────
+
+    LaunchedEffect(uiState.pendingLockedApp) {
+        val app = uiState.pendingLockedApp ?: return@LaunchedEffect
+        val activity = context as? FragmentActivity ?: run {
+            viewModel.cancelLock(); return@LaunchedEffect
+        }
+        val executor = ContextCompat.getMainExecutor(activity)
+        val prompt = BiometricPrompt(
+            activity,
+            executor,
+            object : BiometricPrompt.AuthenticationCallback() {
+                override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                    viewModel.launchAfterBiometric()
+                }
+                override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                    viewModel.cancelLock()
+                }
+            },
+        )
+        val info = BiometricPrompt.PromptInfo.Builder()
+            .setTitle("App lock")
+            .setSubtitle(app.label)
+            .setAllowedAuthenticators(
+                BiometricManager.Authenticators.BIOMETRIC_STRONG or
+                BiometricManager.Authenticators.DEVICE_CREDENTIAL
+            )
+            .build()
+        prompt.authenticate(info)
     }
 }
 

@@ -1,5 +1,7 @@
 package com.minimalist.launcher.feature.settings
 
+import android.content.Context
+import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -12,7 +14,9 @@ import com.minimalist.launcher.core.model.GestureType
 import com.minimalist.launcher.core.model.SortOrder
 import com.minimalist.launcher.core.model.TextAlignment
 import com.minimalist.launcher.core.model.ThemeMode
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asSharedFlow
@@ -23,8 +27,6 @@ import kotlinx.coroutines.launch
 
 class SettingsViewModel(private val prefs: PreferencesRepository) : ViewModel() {
 
-    // Batching the 4 widget prefs into one combine keeps the outer combine at 4 flows
-    // (Kotlin's combine supports up to 5 but clarity matters more than saving a slot).
     private data class WidgetPrefs(
         val weatherEnabled: Boolean,
         val calendarEnabled: Boolean,
@@ -39,27 +41,33 @@ class SettingsViewModel(private val prefs: PreferencesRepository) : ViewModel() 
         prefs.weatherCity,
     ) { we, ce, key, city -> WidgetPrefs(we, ce, key, city) }
 
+    // Declared before uiState so it is initialized when uiState references it.
+    private val _backupMessage = MutableStateFlow("")
+
     val uiState = combine(
-        prefs.appearanceSettings,
-        prefs.sortOrder,
-        prefs.clockFormat,
-        widgetPrefs,
-        prefs.gestureSettings,
-    ) { appearance, sort, clock, widget, gestures ->
-        SettingsUiState(
-            appearance       = appearance,
-            sortOrder        = sort,
-            clockFormat      = clock,
-            weatherEnabled   = widget.weatherEnabled,
-            calendarEnabled  = widget.calendarEnabled,
-            weatherApiKey    = widget.weatherApiKey,
-            weatherCity      = widget.weatherCity,
-            gestureSettings  = gestures,
-        )
-    }.stateIn(viewModelScope, SharingStarted.Lazily, SettingsUiState())
+        combine(
+            prefs.appearanceSettings,
+            prefs.sortOrder,
+            prefs.clockFormat,
+            widgetPrefs,
+            prefs.gestureSettings,
+        ) { appearance, sort, clock, widget, gestures ->
+            SettingsUiState(
+                appearance       = appearance,
+                sortOrder        = sort,
+                clockFormat      = clock,
+                weatherEnabled   = widget.weatherEnabled,
+                calendarEnabled  = widget.calendarEnabled,
+                weatherApiKey    = widget.weatherApiKey,
+                weatherCity      = widget.weatherCity,
+                gestureSettings  = gestures,
+            )
+        },
+        _backupMessage,
+    ) { base, msg -> base.copy(backupMessage = msg) }
+    .stateIn(viewModelScope, SharingStarted.Lazily, SettingsUiState())
 
     // ── Event: request immediate weather fetch ────────────────────────────────
-    // MainActivity listens to this and enqueues a OneTimeWorkRequest for WeatherWorker.
 
     private val _fetchWeatherNow = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val fetchWeatherNow: SharedFlow<Unit> = _fetchWeatherNow.asSharedFlow()
@@ -89,18 +97,10 @@ class SettingsViewModel(private val prefs: PreferencesRepository) : ViewModel() 
         prefs.setCalendarEnabled(enabled)
     }
 
-    fun setWeatherApiKey(key: String) = viewModelScope.launch {
-        prefs.setWeatherApiKey(key)
-    }
+    fun setWeatherApiKey(key: String) = viewModelScope.launch { prefs.setWeatherApiKey(key) }
+    fun setWeatherCity(city: String)  = viewModelScope.launch { prefs.setWeatherCity(city) }
 
-    fun setWeatherCity(city: String) = viewModelScope.launch {
-        prefs.setWeatherCity(city)
-    }
-
-    // Called explicitly from the UI when the user taps "fetch now".
-    fun fetchWeatherNow() = viewModelScope.launch {
-        triggerFetchIfReady()
-    }
+    fun fetchWeatherNow() = viewModelScope.launch { triggerFetchIfReady() }
 
     // ── Gestures (Step 7) ─────────────────────────────────────────────────────
 
@@ -111,9 +111,26 @@ class SettingsViewModel(private val prefs: PreferencesRepository) : ViewModel() 
     private suspend fun triggerFetchIfReady() {
         val key  = prefs.weatherApiKey.first()
         val city = prefs.weatherCity.first()
-        if (key.isNotBlank() && city.isNotBlank()) {
-            _fetchWeatherNow.tryEmit(Unit)
-        }
+        if (key.isNotBlank() && city.isNotBlank()) _fetchWeatherNow.tryEmit(Unit)
+    }
+
+    // ── Step 10: backup / restore ─────────────────────────────────────────────
+
+    fun writeBackup(context: Context, uri: Uri) = viewModelScope.launch(Dispatchers.IO) {
+        runCatching {
+            val json = prefs.exportToJson()
+            context.contentResolver.openOutputStream(uri)?.use { it.writer().write(json) }
+            _backupMessage.value = "backup saved"
+        }.onFailure { _backupMessage.value = "backup failed: ${it.message}" }
+    }
+
+    fun readAndApplyRestore(context: Context, uri: Uri) = viewModelScope.launch(Dispatchers.IO) {
+        runCatching {
+            val json = context.contentResolver.openInputStream(uri)?.use { it.reader().readText() }
+                ?: return@launch
+            prefs.importFromJson(json)
+            _backupMessage.value = "restore complete — restart app to see all changes"
+        }.onFailure { _backupMessage.value = "restore failed: ${it.message}" }
     }
 
     // ── Factory ──────────────────────────────────────────────────────────────

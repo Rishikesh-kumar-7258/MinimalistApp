@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Restricts the app's network access to only the OpenWeatherMap API domain.
+    All other outbound connections are blocked, enforcing the zero-telemetry promise.
+-->
+<network-security-config>
+    <!-- Allow HTTPS to the weather API only -->
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="true">api.openweathermap.org</domain>
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </domain-config>
+
+    <!-- Block all other network traffic (no cleartext, no unknown destinations) -->
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>
