@@ -43,6 +43,8 @@ desktop.ini
 # Logs
 *.log
 *.txt.bak
+*.txt
+Build and Check
 
 # VS Code
 .vscode/
