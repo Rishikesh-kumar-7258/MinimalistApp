@@ -71,6 +71,8 @@ class PreferencesRepository(private val dataStore: DataStore<Preferences>) {
         // Step 10 keys
         private val SCRATCH_PAD_CONTENT = stringPreferencesKey("scratch_pad_content")
         private val LOCKED_APPS         = stringSetPreferencesKey("locked_apps")
+        // Pinned slot count (how many todo/pinned rows to display, default 3)
+        private val PINNED_SLOT_COUNT   = intPreferencesKey("pinned_slot_count")
     }
 
     val hiddenApps: Flow<Set<String>> =
@@ -167,6 +169,12 @@ class PreferencesRepository(private val dataStore: DataStore<Preferences>) {
     private fun encode(item: PinnedItem): String = when (item) {
         is PinnedItem.App     -> "app::${item.packageName}::${item.label}"
         is PinnedItem.Contact -> "contact::${item.number}::${item.name}"
+    }
+
+    val pinnedSlotCount: Flow<Int> = dataStore.data.map { (it[PINNED_SLOT_COUNT] ?: 3).coerceIn(3, 5) }
+
+    suspend fun setPinnedSlotCount(count: Int) {
+        dataStore.edit { it[PINNED_SLOT_COUNT] = count.coerceIn(3, 5) }
     }
 
     // ── Step 5: appearance settings ──────────────────────────────────────────

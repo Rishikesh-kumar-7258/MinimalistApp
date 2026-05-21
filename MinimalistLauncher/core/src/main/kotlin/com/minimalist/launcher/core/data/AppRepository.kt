@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.provider.AlarmClock
 import android.util.Log
 import com.minimalist.launcher.core.model.AppInfo
 
@@ -54,6 +55,32 @@ class AppRepository(private val context: Context) {
         } catch (e: ActivityNotFoundException) {
             Log.w("AppRepository", "Settings action not available: $action")
         }
+    }
+
+    fun launchClockApp() {
+        val pm = context.packageManager
+        // Try actions in priority order; the first one that resolves is used.
+        val candidates = listOf(
+            Intent(AlarmClock.ACTION_SHOW_ALARMS),
+            Intent(AlarmClock.ACTION_SHOW_TIMERS),
+            Intent(AlarmClock.ACTION_SET_ALARM),
+        )
+        for (intent in candidates) {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            if (pm.resolveActivity(intent, PackageManager.MATCH_DEFAULT_ONLY) != null) {
+                try { context.startActivity(intent); return }
+                catch (_: ActivityNotFoundException) { /* try next */ }
+            }
+        }
+        Log.w("AppRepository", "No clock app resolved for any alarm intent")
+    }
+
+    fun launchCalendarApp() {
+        val intent = Intent(Intent.ACTION_MAIN)
+            .addCategory(Intent.CATEGORY_APP_CALENDAR)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        try { context.startActivity(intent) }
+        catch (e: ActivityNotFoundException) { Log.w("AppRepository", "No calendar app") }
     }
 
     fun launchGoogleSearch() {

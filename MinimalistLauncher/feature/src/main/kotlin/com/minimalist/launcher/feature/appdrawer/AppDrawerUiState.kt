@@ -22,6 +22,7 @@ data class AppDrawerUiState(
     val currentDate: String = "",
     val use24h: Boolean = false,
     val pinnedItems: List<PinnedItem?> = emptyList(),
+    val pinnedSlotCount: Int = 3,
     val editingPinnedSlot: Int? = null,
     // ── Widgets (Step 6) ─────────────────────────────────────────────────────
     val weatherLine: String? = null,

@@ -229,9 +229,12 @@ fun AppDrawerScreen(viewModel: AppDrawerViewModel, onOpenSettings: () -> Unit = 
             when (page) {
                 0 -> HomeScreenPage(
                     uiState              = uiState,
-                    onToggleClock        = viewModel::toggleClockFormat,
+                    onTimeClick          = viewModel::launchClock,
+                    onDateClick          = viewModel::launchCalendarApp,
                     onPinnedClick        = viewModel::onPinnedItemClick,
                     onPinnedLong         = viewModel::onPinnedItemLongPress,
+                    onIncrementSlots     = viewModel::incrementPinnedSlotCount,
+                    onDecrementSlots     = viewModel::decrementPinnedSlotCount,
                     onGesture            = ::onGesture,
                     onOpenSettings       = onOpenSettings,
                     onOpenProfileSwitcher = { showProfileSwitcher = true },
@@ -351,130 +354,134 @@ fun AppDrawerScreen(viewModel: AppDrawerViewModel, onOpenSettings: () -> Unit = 
 @Composable
 private fun HomeScreenPage(
     uiState: AppDrawerUiState,
-    onToggleClock: () -> Unit,
+    onTimeClick: () -> Unit,
+    onDateClick: () -> Unit,
     onPinnedClick: (PinnedItem) -> Unit,
     onPinnedLong: (Int) -> Unit,
+    onIncrementSlots: () -> Unit,
+    onDecrementSlots: () -> Unit,
     onGesture: (GestureAction) -> Unit,
     onOpenSettings: () -> Unit,
     onOpenProfileSwitcher: () -> Unit,
 ) {
     val gestures = uiState.gestureSettings
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            // Observe touches without consuming so HorizontalPager still handles
-            // horizontal swipes for page navigation.
-            .pointerInput(gestures) {
-                val swipeThresholdPx  = 80.dp.toPx()
-                val tapMaxMovePx      = 20f
-                val doubleTapMs       = 400L
-                val longPressMs       = 500L
-                var lastTapTime       = -1L
+    // ClockSection lives outside the gesture Box so its taps are never
+    // intercepted by the PointerEventPass.Initial swipe/double-tap handler.
+    Column(modifier = Modifier.fillMaxSize()) {
+        ClockSection(
+            time        = uiState.currentTime,
+            date        = uiState.currentDate,
+            onTimeClick = onTimeClick,
+            onDateClick = onDateClick,
+        )
 
-                awaitPointerEventScope {
-                    while (true) {
-                        val down       = awaitPointerEvent(PointerEventPass.Initial)
-                        val downChange = down.changes.firstOrNull() ?: continue
-                        if (!downChange.pressed) continue   // skip non-down events
+        // The gesture-aware Box fills the remaining space below the clock.
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .pointerInput(gestures) {
+                    val swipeThresholdPx  = 80.dp.toPx()
+                    val tapMaxMovePx      = 20f
+                    val doubleTapMs       = 400L
+                    val longPressMs       = 500L
+                    var lastTapTime       = -1L
 
-                        val startPos  = downChange.position
-                        val startTime = System.currentTimeMillis()
-                        var endPos    = startPos
-
-                        // Track until finger lifts.
+                    awaitPointerEventScope {
                         while (true) {
-                            val event  = awaitPointerEvent(PointerEventPass.Initial)
-                            val change = event.changes.firstOrNull() ?: break
-                            endPos = change.position
-                            if (!change.pressed) break
-                        }
+                            val down       = awaitPointerEvent(PointerEventPass.Initial)
+                            val downChange = down.changes.firstOrNull() ?: continue
+                            if (!downChange.pressed) continue
 
-                        val dx      = endPos.x - startPos.x
-                        val dy      = endPos.y - startPos.y
-                        val absDx   = abs(dx)
-                        val absDy   = abs(dy)
-                        val elapsed = System.currentTimeMillis() - startTime
+                            val startPos  = downChange.position
+                            val startTime = System.currentTimeMillis()
+                            var endPos    = startPos
 
-                        when {
-                            // Long press on background (held still >500 ms) → profile switcher
-                            absDx < tapMaxMovePx && absDy < tapMaxMovePx && elapsed >= longPressMs -> {
-                                lastTapTime = -1
-                                onOpenProfileSwitcher()
+                            while (true) {
+                                val event  = awaitPointerEvent(PointerEventPass.Initial)
+                                val change = event.changes.firstOrNull() ?: break
+                                endPos = change.position
+                                if (!change.pressed) break
                             }
-                            // Tap — check for double-tap
-                            absDx < tapMaxMovePx && absDy < tapMaxMovePx && elapsed < 300 -> {
-                                val now = System.currentTimeMillis()
-                                if (lastTapTime > 0 && now - lastTapTime < doubleTapMs) {
-                                    onGesture(gestures.doubleTap)
+
+                            val dx      = endPos.x - startPos.x
+                            val dy      = endPos.y - startPos.y
+                            val absDx   = abs(dx)
+                            val absDy   = abs(dy)
+                            val elapsed = System.currentTimeMillis() - startTime
+
+                            when {
+                                absDx < tapMaxMovePx && absDy < tapMaxMovePx && elapsed >= longPressMs -> {
                                     lastTapTime = -1
-                                } else {
-                                    lastTapTime = now
+                                    onOpenProfileSwitcher()
                                 }
-                            }
-                            // Directional swipe
-                            else -> {
-                                lastTapTime = -1
-                                when {
-                                    absDy > absDx * 1.5f && dy < -swipeThresholdPx -> onGesture(gestures.swipeUp)
-                                    absDy > absDx * 1.5f && dy >  swipeThresholdPx -> onGesture(gestures.swipeDown)
-                                    absDx > absDy * 1.5f && dx < -swipeThresholdPx -> onGesture(gestures.swipeLeft)
-                                    absDx > absDy * 1.5f && dx >  swipeThresholdPx -> onGesture(gestures.swipeRight)
+                                absDx < tapMaxMovePx && absDy < tapMaxMovePx && elapsed < 300 -> {
+                                    val now = System.currentTimeMillis()
+                                    if (lastTapTime > 0 && now - lastTapTime < doubleTapMs) {
+                                        onGesture(gestures.doubleTap)
+                                        lastTapTime = -1
+                                    } else {
+                                        lastTapTime = now
+                                    }
+                                }
+                                else -> {
+                                    lastTapTime = -1
+                                    when {
+                                        absDy > absDx * 1.5f && dy < -swipeThresholdPx -> onGesture(gestures.swipeUp)
+                                        absDy > absDx * 1.5f && dy >  swipeThresholdPx -> onGesture(gestures.swipeDown)
+                                        absDx > absDy * 1.5f && dx < -swipeThresholdPx -> onGesture(gestures.swipeLeft)
+                                        absDx > absDy * 1.5f && dx >  swipeThresholdPx -> onGesture(gestures.swipeRight)
+                                    }
                                 }
                             }
                         }
                     }
-                }
-            },
-    ) {
-        Column(modifier = Modifier.fillMaxSize()) {
-            ClockSection(
-                time           = uiState.currentTime,
-                date           = uiState.currentDate,
-                onToggleFormat = onToggleClock,
-            )
+                },
+        ) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                WidgetLine(text = uiState.weatherLine)
+                WidgetLine(text = uiState.calendarLine)
 
-            WidgetLine(text = uiState.weatherLine)
-            WidgetLine(text = uiState.calendarLine)
-
-            if (uiState.pinnedItems.any { it != null }) {
-                PinnedSection(
-                    items           = uiState.pinnedItems,
-                    onItemClick     = onPinnedClick,
-                    onItemLongPress = onPinnedLong,
-                )
-            }
-
-            Spacer(Modifier.weight(1f))
-
-            // ── Bottom bar: profile indicator + settings link ─────────────────
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 32.dp, vertical = 24.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                // Active profile name — tap to switch
-                Text(
-                    text  = if (uiState.activeProfile == FocusProfile.NONE) "—"
-                            else uiState.activeProfile.name.lowercase(),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onBackground.copy(
-                        alpha = if (uiState.activeProfile == FocusProfile.NONE) 0.15f else 0.55f,
-                    ),
-                    modifier = Modifier
-                        .clickable { onOpenProfileSwitcher() }
-                        .padding(4.dp),
-                )
                 Spacer(Modifier.weight(1f))
-                Text(
-                    text  = "settings",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.2f),
-                    modifier = Modifier
-                        .clickable { onOpenSettings() }
-                        .padding(8.dp),
+
+                PinnedSection(
+                    items            = uiState.pinnedItems,
+                    slotCount        = uiState.pinnedSlotCount,
+                    onItemClick      = onPinnedClick,
+                    onItemLongPress  = onPinnedLong,
+                    onIncrementSlots = onIncrementSlots,
+                    onDecrementSlots = onDecrementSlots,
                 )
+
+                // ── Bottom bar: profile indicator + settings link ─────────────
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 32.dp, vertical = 24.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text  = if (uiState.activeProfile == FocusProfile.NONE) "—"
+                                else uiState.activeProfile.name.lowercase(),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onBackground.copy(
+                            alpha = if (uiState.activeProfile == FocusProfile.NONE) 0.15f else 0.55f,
+                        ),
+                        modifier = Modifier
+                            .clickable { onOpenProfileSwitcher() }
+                            .padding(4.dp),
+                    )
+                    Spacer(Modifier.weight(1f))
+                    Text(
+                        text  = "settings",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.2f),
+                        modifier = Modifier
+                            .clickable { onOpenSettings() }
+                            .padding(8.dp),
+                    )
+                }
             }
         }
     }
@@ -567,14 +574,14 @@ private fun AppDrawerPage(
 private fun ClockSection(
     time: String,
     date: String,
-    onToggleFormat: () -> Unit,
+    onTimeClick: () -> Unit,
+    onDateClick: () -> Unit,
 ) {
     if (time.isEmpty()) return
     val textAlign = LocalAppearance.current.textAlignment.toTextAlign()
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onToggleFormat)
             .padding(horizontal = 32.dp)
             .padding(top = 40.dp, bottom = 20.dp),
     ) {
@@ -583,7 +590,7 @@ private fun ClockSection(
             style     = MaterialTheme.typography.displayMedium,
             color     = MaterialTheme.colorScheme.onBackground,
             textAlign = textAlign,
-            modifier  = Modifier.fillMaxWidth(),
+            modifier  = Modifier.fillMaxWidth().clickable(onClick = onTimeClick),
         )
         Spacer(Modifier.height(4.dp))
         Text(
@@ -591,7 +598,7 @@ private fun ClockSection(
             style     = MaterialTheme.typography.bodyMedium,
             color     = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
             textAlign = textAlign,
-            modifier  = Modifier.fillMaxWidth(),
+            modifier  = Modifier.fillMaxWidth().clickable(onClick = onDateClick),
         )
     }
 }
@@ -620,8 +627,11 @@ private fun WidgetLine(text: String?) {
 @Composable
 private fun PinnedSection(
     items: List<PinnedItem?>,
+    slotCount: Int,
     onItemClick: (PinnedItem) -> Unit,
     onItemLongPress: (Int) -> Unit,
+    onIncrementSlots: () -> Unit,
+    onDecrementSlots: () -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -629,18 +639,42 @@ private fun PinnedSection(
             .padding(horizontal = 32.dp)
             .padding(bottom = 8.dp),
     ) {
-        items.forEachIndexed { slot, item ->
-            if (item == null) return@forEachIndexed
+        (0 until slotCount).forEach { slot ->
+            val item = items.getOrNull(slot)
             val label = when (item) {
                 is PinnedItem.App     -> item.label
                 is PinnedItem.Contact -> item.name
+                null                  -> "—"
             }
             AppTextItem(
                 label       = label,
-                onClick     = { onItemClick(item) },
+                onClick     = { if (item != null) onItemClick(item) else onItemLongPress(slot) },
                 onLongClick = { onItemLongPress(slot) },
                 verticalPad = 10.dp,
             )
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 4.dp),
+        ) {
+            if (slotCount < 5) {
+                Text(
+                    text     = "+ shortcut",
+                    style    = MaterialTheme.typography.labelSmall,
+                    color    = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.25f),
+                    modifier = Modifier.clickable { onIncrementSlots() }.padding(4.dp),
+                )
+            }
+            Spacer(Modifier.weight(1f))
+            if (slotCount > 3) {
+                Text(
+                    text     = "— shortcut",
+                    style    = MaterialTheme.typography.labelSmall,
+                    color    = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.25f),
+                    modifier = Modifier.clickable { onDecrementSlots() }.padding(4.dp),
+                )
+            }
         }
     }
 }

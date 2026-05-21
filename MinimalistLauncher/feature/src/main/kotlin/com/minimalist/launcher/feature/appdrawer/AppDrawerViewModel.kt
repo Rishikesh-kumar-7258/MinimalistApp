@@ -149,11 +149,25 @@ class AppDrawerViewModel(
         }.flowOn(Dispatchers.Default)
     }
 
-    private val pinnedItemsFlow = preferencesRepository.pinnedItems()
+    private val allPinnedItemsFlow = preferencesRepository.pinnedItems()
         .stateIn(viewModelScope, SharingStarted.Lazily, List(5) { null })
 
-    private val homeState = combine(clockState, pinnedItemsFlow) { clock, pins ->
-        clock to pins
+    private val pinnedItemsFlow = combine(
+        allPinnedItemsFlow,
+        preferencesRepository.pinnedSlotCount,
+    ) { items, count -> items.take(count) }
+        .stateIn(viewModelScope, SharingStarted.Lazily, List(3) { null })
+
+    private data class HomeState(
+        val time: String, val date: String, val use24h: Boolean,
+        val pins: List<PinnedItem?>, val pinnedSlotCount: Int,
+    )
+
+    private val homeState = combine(
+        clockState, pinnedItemsFlow, preferencesRepository.pinnedSlotCount
+    ) { clock, pins, count ->
+        val (time, date, use24h) = clock
+        HomeState(time, date, use24h, pins, count)
     }
 
     // ── Widgets (Step 6) ─────────────────────────────────────────────────────
@@ -265,13 +279,13 @@ class AppDrawerViewModel(
         }
     }.flowOn(Dispatchers.Default)
 
-    val uiState = combine(rawUiState, homeState, widgetState, gestureSettings) { base, (clock, pins), (weather, calendar), gestures ->
-        val (time, date, use24h) = clock
+    val uiState = combine(rawUiState, homeState, widgetState, gestureSettings) { base, home, (weather, calendar), gestures ->
         base.copy(
-            currentTime     = time,
-            currentDate     = date,
-            use24h          = use24h,
-            pinnedItems     = pins,
+            currentTime     = home.time,
+            currentDate     = home.date,
+            use24h          = home.use24h,
+            pinnedItems     = home.pins,
+            pinnedSlotCount = home.pinnedSlotCount,
             weatherLine     = weather,
             calendarLine    = calendar,
             gestureSettings = gestures,
@@ -469,7 +483,7 @@ class AppDrawerViewModel(
 
     fun pinApp(app: AppInfo) {
         viewModelScope.launch {
-            val emptySlot = pinnedItemsFlow.value.indexOfFirst { it == null }
+            val emptySlot = allPinnedItemsFlow.value.indexOfFirst { it == null }
             if (emptySlot >= 0) {
                 preferencesRepository.setPinnedItem(
                     emptySlot,
@@ -502,6 +516,18 @@ class AppDrawerViewModel(
     fun launchGoogleSearch() = appRepository.launchGoogleSearch()
 
     fun launchDialer() = appRepository.launchDialer()
+
+    fun launchClock() = appRepository.launchClockApp()
+
+    fun launchCalendarApp() = appRepository.launchCalendarApp()
+
+    fun incrementPinnedSlotCount() {
+        viewModelScope.launch { preferencesRepository.setPinnedSlotCount(uiState.value.pinnedSlotCount + 1) }
+    }
+
+    fun decrementPinnedSlotCount() {
+        viewModelScope.launch { preferencesRepository.setPinnedSlotCount(uiState.value.pinnedSlotCount - 1) }
+    }
 
     // ── Focus profiles (Step 8) ──────────────────────────────────────────────
 
